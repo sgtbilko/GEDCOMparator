@@ -57,7 +57,14 @@
   .opts-col, .opts-row > .opts-col { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: 340px; }
   .opts-line { display: flex; align-items: center; gap: 8px; }
   .hint { font-size: 11px; color: var(--muted); line-height: 1.4; }
-  .opts-row label.disabled-label { color: var(--muted); }
+  .opts-row label.disabled-label, .opts-stack label.disabled-label { color: var(--muted); }
+  .opts-stack { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
+  .opts-stack-line { display: flex; align-items: center; gap: 8px; }
+  .opts-stack-line label { font-size: 13px; color: var(--ink); }
+  .opts-stack-line input[type="number"] { width: 70px; margin-top: 0; }
+  .opts-stack-line-wrap { flex-direction: column; align-items: flex-start; gap: 4px; }
+  .opts-stack-line-wrap .opts-line { display: flex; align-items: center; gap: 8px; }
+  .opts-stack-line-wrap .hint { max-width: 480px; }
   button.primary {
     background: var(--accent);
     color: white;
@@ -198,20 +205,20 @@
         <select id="rootB"></select>
       </div>
     </div>
-    <div class="opts-row">
-      <div>
+    <div class="opts-stack">
+      <div class="opts-stack-line">
         <label for="maxGen">Generations back:</label>
         <input type="number" id="maxGen" value="6" min="1" max="12" />
       </div>
-      <div>
+      <div class="opts-stack-line">
         <input type="checkbox" id="includeSiblings" onchange="onIncludeSiblingsChange()" />
         <label for="includeSiblings">Include siblings of ancestors</label>
       </div>
-      <div>
+      <div class="opts-stack-line">
         <input type="checkbox" id="includeSibSpouses" disabled />
         <label for="includeSibSpouses" id="includeSibSpousesLabel" class="disabled-label">Also include spouses of siblings</label>
       </div>
-      <div class="opts-col">
+      <div class="opts-stack-line opts-stack-line-wrap">
         <div class="opts-line">
           <label for="descendantGen">Descendant generations (children of ancestors):</label>
           <input type="number" id="descendantGen" value="0" min="0" max="6" />
