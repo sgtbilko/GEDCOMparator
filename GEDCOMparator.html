@@ -246,7 +246,7 @@
       </div>
       <div class="opts-stack-line">
         <input type="checkbox" id="includeSibSpouses" disabled />
-        <label for="includeSibSpouses" id="includeSibSpousesLabel" class="disabled-label">Also include spouses of siblings</label>
+        <label for="includeSibSpouses" id="includeSibSpousesLabel" class="disabled-label">Include spouses of siblings</label>
       </div>
       <div class="opts-stack-line opts-stack-line-wrap">
         <div class="opts-line">
@@ -376,7 +376,7 @@ function tryAutoMatchRoot() {
 
 // ---------- Options UI helpers ----------
 
-// "Also include spouses of siblings" only makes sense when siblings themselves
+// "Include spouses of siblings" only makes sense when siblings themselves
 // are being included, so it's disabled (and forced off) whenever "Include
 // siblings of ancestors" is unchecked.
 function onIncludeSiblingsChange() {
