@@ -156,6 +156,20 @@
   }
   .report-controls > div { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
   .report-controls label { font-size: 13px; cursor: pointer; }
+  .toggle-btn {
+    background: var(--card);
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    padding: 6px 14px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .toggle-btn:hover { background: var(--accent-soft); }
+  .toggle-btn.active { background: var(--accent); color: white; }
+  .reviewed-cell { text-align: center; }
+  .reviewed-cell input[type="checkbox"] { cursor: pointer; }
+  tr.reviewed-row td { opacity: 0.6; }
   .slider-wrap { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
   .slider-wrap input[type="range"] { width: 100px; margin-top: 0; accent-color: var(--accent); }
   .slider-wrap span#aliveYearsVal, .slider-wrap span#locationThresholdVal { color: var(--ink); font-weight: 600; min-width: 28px; }
@@ -231,8 +245,10 @@
 
   <div class="report-controls" id="reportControls" style="display:none;">
     <div>
-      <input type="checkbox" id="hideExactMatches" checked onchange="onFilterChange()" />
-      <label for="hideExactMatches">Hide exact matches</label>
+      <button type="button" id="showReviewedBtn" class="toggle-btn" onclick="toggleShowReviewed()">Show reviewed items</button>
+    </div>
+    <div>
+      <button type="button" id="hideExactMatchesBtn" class="toggle-btn active" onclick="toggleHideExactMatches()">Show exact matches</button>
     </div>
     <div>
       <input type="checkbox" id="ignoreLikelyAlive" onchange="onFilterChange()" />
@@ -793,6 +809,11 @@ function runCompare() {
   const includeSibSpouses = document.getElementById('includeSibSpouses').checked && includeSiblings;
   const descendantGen = parseInt(document.getElementById('descendantGen').value, 10) || 0;
 
+  // A fresh comparison means a fresh set of row ids, so any previously-reviewed
+  // rows (from a prior comparison) no longer apply.
+  reviewedIds = new Set();
+  rowIdCounter = 0;
+
   const lineageA = buildLineage(dataA, rootA, maxGen);
   const lineageB = buildLineage(dataB, rootB, maxGen);
 
@@ -827,7 +848,7 @@ function runCompare() {
       const indA = dataA.individuals[idA];
       const indB = dataB.individuals[idB];
       const fieldDiffs = compareIndividuals(indA, indB);
-      rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB) });
+      rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), id: nextRowId() });
       markShown(idA, idB);
     } else if (idA) {
       totalMissingB++;
@@ -853,7 +874,7 @@ function runCompare() {
       const fieldDiffs = compareIndividuals(indA, indB);
       rows.push({
         role: 'Sibling', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
-        name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB)
+        name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), id: nextRowId()
       });
       markShown(pair.aId, pair.bId);
     }
@@ -889,7 +910,7 @@ function runCompare() {
       fieldDiffs.push({ label: 'Marriage place', a: marrA.place, b: marrB.place, same: fieldsEqual(marrA.place, marrB.place), type: 'place', similarity: placeSimilarity(marrA.place, marrB.place) });
       rows.push({
         role: 'Spouse', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
-        name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB)
+        name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), id: nextRowId()
       });
       markShown(pair.aId, pair.bId);
     }
@@ -924,7 +945,7 @@ function runCompare() {
         const indA = dataA.individuals[pair.aId];
         const indB = dataB.individuals[pair.bId];
         const fieldDiffs = compareIndividuals(indA, indB);
-        rows.push({ role: "Sibling's spouse", status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB) });
+        rows.push({ role: "Sibling's spouse", status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), id: nextRowId() });
         markShown(pair.aId, pair.bId);
       }
       for (const aId of m.missingInB) {
@@ -957,7 +978,7 @@ function runCompare() {
         const indA = dataA.individuals[pair.aId];
         const indB = dataB.individuals[pair.bId];
         const fieldDiffs = compareIndividuals(indA, indB);
-        rows.push({ role: label, status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB) });
+        rows.push({ role: label, status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), id: nextRowId() });
         markShown(pair.aId, pair.bId);
         addDescendantRows(pair.aId, pair.bId, depthRemaining - 1, genIndex + 1, rows);
       }
@@ -986,7 +1007,7 @@ function runCompare() {
 function missingRow(role, status, indi) {
   return {
     role, status, name: indi.name.full, fieldDiffs: null,
-    birthDate: indi.birth.date, deathDate: indi.death.date
+    birthDate: indi.birth.date, deathDate: indi.death.date, id: nextRowId()
   };
 }
 
@@ -1031,6 +1052,40 @@ function statusBadge(status) {
 
 let lastSections = null;
 
+// Reviewed-state tracking: each row gets a stable numeric id when the report is
+// built (see nextRowId()). Ticking a row's "Reviewed" checkbox adds its id to
+// reviewedIds, which hides that row on the next render unless "Show reviewed
+// items" is on. This state is intentionally independent of the other filters
+// (hide exact matches / ignore likely-alive / similar locations) — once
+// reviewed, a row is simply done, and is excluded before any other filter logic
+// runs.
+let reviewedIds = new Set();
+let rowIdCounter = 0;
+let showReviewed = false;
+let hideExactMatches = true;
+function nextRowId() { return rowIdCounter++; }
+
+function toggleReviewed(id, checked) {
+  if (checked) reviewedIds.add(id); else reviewedIds.delete(id);
+  renderReport();
+}
+
+function toggleShowReviewed() {
+  showReviewed = !showReviewed;
+  const btn = document.getElementById('showReviewedBtn');
+  btn.textContent = showReviewed ? 'Hide reviewed items' : 'Show reviewed items';
+  btn.classList.toggle('active', showReviewed);
+  renderReport();
+}
+
+function toggleHideExactMatches() {
+  hideExactMatches = !hideExactMatches;
+  const btn = document.getElementById('hideExactMatchesBtn');
+  btn.textContent = hideExactMatches ? 'Show exact matches' : 'Hide exact matches';
+  btn.classList.toggle('active', hideExactMatches);
+  renderReport();
+}
+
 function onFilterChange() {
   renderReport();
 }
@@ -1039,7 +1094,6 @@ function renderReport() {
   if (!lastSections) return;
   const el = document.getElementById('report');
 
-  const hideExactMatches = document.getElementById('hideExactMatches').checked;
   const ignoreLikelyAlive = document.getElementById('ignoreLikelyAlive').checked;
   const ignoreSimilarLocations = document.getElementById('ignoreSimilarLocations').checked;
   const aliveYears = parseInt(document.getElementById('aliveYears').value, 10);
@@ -1049,12 +1103,16 @@ function renderReport() {
   document.getElementById('locationThresholdVal').textContent = locationThresholdPct + '%';
 
   let totalCompared = 0, totalWithDiffs = 0, totalMissingA = 0, totalMissingB = 0;
-  let hiddenExact = 0, hiddenAlive = 0;
+  let hiddenExact = 0, hiddenAlive = 0, hiddenReviewed = 0;
   const visibleSections = [];
 
   for (const section of lastSections) {
     const visibleRows = [];
     for (const row of section.rows) {
+      // A reviewed row is hidden unconditionally (unless "Show reviewed items" is
+      // on) — it's excluded before any of the other filter logic even runs, since
+      // once reviewed a row is simply done and shouldn't count toward the other stats.
+      if (reviewedIds.has(row.id) && !showReviewed) { hiddenReviewed++; continue; }
       const likelyAlive = ignoreLikelyAlive && isLikelyAlive(row, aliveYears);
       if (row.status === 'missA' || row.status === 'missB') {
         // "Ignore all people likely still alive" removes missing-person rows for them.
@@ -1086,10 +1144,11 @@ function renderReport() {
     <div class="card"><div class="num">${totalMissingB}</div><div class="lbl">Missing from File B shown</div></div>
   </div>`;
 
-  if (hideExactMatches || ignoreLikelyAlive) {
+  if (hideExactMatches || ignoreLikelyAlive || hiddenReviewed > 0) {
     const bits = [];
     if (hideExactMatches) bits.push(`${hiddenExact} exact match${hiddenExact === 1 ? '' : 'es'} hidden`);
     if (ignoreLikelyAlive) bits.push(`${hiddenAlive} likely-living ${hiddenAlive === 1 ? 'person' : 'people'} hidden`);
+    if (hiddenReviewed > 0) bits.push(`${hiddenReviewed} reviewed ${hiddenReviewed === 1 ? 'item' : 'items'} hidden`);
     html += `<div class="legend">${bits.join(' · ')}</div>`;
   }
 
@@ -1107,10 +1166,11 @@ function renderReport() {
     html += `<div class="section">
       <div class="section-head"><span>${esc(section.label)}</span><span class="gen">generation ${section.gen}</span></div>
       <table>
-        <thead><tr><th style="width:12%">Role</th><th style="width:20%">Individual</th><th style="width:13%">Status</th><th>Attributes</th></tr></thead>
+        <thead><tr><th style="width:12%">Role</th><th style="width:18%">Individual</th><th style="width:12%">Status</th><th>Attributes</th><th style="width:9%">Reviewed</th></tr></thead>
         <tbody>`;
     for (const row of section.rows) {
-      html += `<tr>
+      const isReviewed = reviewedIds.has(row.id);
+      html += `<tr${isReviewed ? ' class="reviewed-row"' : ''}>
         <td class="role-tag">${esc(row.role)}</td>
         <td>${esc(row.name || '(unnamed)')}</td>
         <td>${statusBadge(row.status)}</td>
@@ -1125,7 +1185,9 @@ function renderReport() {
         const aliveNote = isLikelyAlive(row, aliveYears) ? ' <span class="empty-val">(possibly still living)</span>' : '';
         html += `<span class="empty-val">Not present to compare — add to the missing file.</span>${aliveNote}`;
       }
-      html += `</td></tr>`;
+      html += `</td>
+        <td class="reviewed-cell"><input type="checkbox" ${isReviewed ? 'checked' : ''} onchange="toggleReviewed(${row.id}, this.checked)" /></td>
+      </tr>`;
     }
     html += `</tbody></table></div>`;
   }
