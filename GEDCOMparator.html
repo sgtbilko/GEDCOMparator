@@ -170,20 +170,6 @@
   }
   .report-controls > div { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
   .report-controls label { font-size: 13px; cursor: pointer; }
-  .toggle-btn {
-    border: 1px solid var(--accent);
-    border-radius: 8px;
-    padding: 6px 14px;
-    font-size: 13px;
-    cursor: pointer;
-  }
-  /* Default/"hiding" state: label reads "Show ..." (i.e. offering to reveal what's
-     currently hidden) — shown with a green (accent) background. */
-  .toggle-btn.toggle-btn-show { background: var(--accent); color: white; }
-  .toggle-btn.toggle-btn-show:hover { opacity: 0.9; }
-  /* Toggled/"revealed" state: label reads "Hide ..." — shown with a white background. */
-  .toggle-btn.toggle-btn-hide { background: var(--card); color: var(--accent); }
-  .toggle-btn.toggle-btn-hide:hover { background: var(--accent-soft); }
   .slider-wrap { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
   .slider-wrap input[type="range"] { width: 100px; margin-top: 0; accent-color: var(--accent); }
   .slider-wrap span#aliveYearsVal, .slider-wrap span#locationThresholdVal { color: var(--ink); font-weight: 600; min-width: 28px; }
@@ -259,14 +245,16 @@
 
   <div class="report-controls" id="reportControls" style="display:none;">
     <div>
-      <button type="button" id="showReviewedBtn" class="toggle-btn toggle-btn-show" onclick="toggleShowReviewed()">Show reviewed items</button>
+      <input type="checkbox" id="hideReviewedItems" checked onchange="onFilterChange()" />
+      <label for="hideReviewedItems">Hide reviewed items</label>
     </div>
     <div>
-      <button type="button" id="hideExactMatchesBtn" class="toggle-btn toggle-btn-show" onclick="toggleHideExactMatches()">Show exact matches</button>
+      <input type="checkbox" id="hideExactMatches" checked onchange="onFilterChange()" />
+      <label for="hideExactMatches">Hide exact matches</label>
     </div>
     <div>
       <input type="checkbox" id="ignoreLikelyAlive" onchange="onFilterChange()" />
-      <label for="ignoreLikelyAlive">Ignore all people likely still alive</label>
+      <label for="ignoreLikelyAlive">Hide people likely still alive</label>
       <span class="slider-wrap">
         (no death date, born within last
         <input type="range" id="aliveYears" min="60" max="100" step="10" value="80" oninput="onFilterChange()" />
@@ -275,7 +263,7 @@
     </div>
     <div>
       <input type="checkbox" id="ignoreSimilarLocations" onchange="onFilterChange()" />
-      <label for="ignoreSimilarLocations">Treat similar locations as matching</label>
+      <label for="ignoreSimilarLocations">Hide matches with similar locations</label>
       <span class="slider-wrap">
         (similarity ≥
         <input type="range" id="locationThreshold" min="0" max="100" step="10" value="50" oninput="onFilterChange()" />
@@ -1257,45 +1245,17 @@ let lastSections = null;
 
 // Reviewed-state tracking: each row gets a stable numeric id when the report is
 // built (see nextRowId()). Ticking a row's "Reviewed" checkbox adds its id to
-// reviewedIds, which hides that row on the next render unless "Show reviewed
-// items" is on. This state is intentionally independent of the other filters
-// (hide exact matches / ignore likely-alive / similar locations) — once
+// reviewedIds, which hides that row on the next render unless "Hide reviewed
+// items" is unchecked. This state is intentionally independent of the other
+// filters (hide exact matches / hide likely-alive / similar locations) — once
 // reviewed, a row is simply done, and is excluded before any other filter logic
 // runs.
 let reviewedIds = new Set();
 let rowIdCounter = 0;
-let showReviewed = false;
-let hideExactMatches = true;
 function nextRowId() { return rowIdCounter++; }
 
 function toggleReviewed(id, checked) {
   if (checked) reviewedIds.add(id); else reviewedIds.delete(id);
-  renderReport();
-}
-
-// Sets a toggle button's label and colors it based on that label's wording:
-// green ("toggle-btn-show") when it reads "Show ...", white ("toggle-btn-hide")
-// when it reads "Hide ...". The color always follows the text, not the raw
-// boolean state, so this stays correct even if a button's default meaning
-// were ever flipped.
-function setToggleButtonLabel(btn, label) {
-  btn.textContent = label;
-  const isShowLabel = label.trim().toLowerCase().startsWith('show');
-  btn.classList.toggle('toggle-btn-show', isShowLabel);
-  btn.classList.toggle('toggle-btn-hide', !isShowLabel);
-}
-
-function toggleShowReviewed() {
-  showReviewed = !showReviewed;
-  const btn = document.getElementById('showReviewedBtn');
-  setToggleButtonLabel(btn, showReviewed ? 'Hide reviewed items' : 'Show reviewed items');
-  renderReport();
-}
-
-function toggleHideExactMatches() {
-  hideExactMatches = !hideExactMatches;
-  const btn = document.getElementById('hideExactMatchesBtn');
-  setToggleButtonLabel(btn, hideExactMatches ? 'Show exact matches' : 'Hide exact matches');
   renderReport();
 }
 
@@ -1307,6 +1267,8 @@ function renderReport() {
   if (!lastSections) return;
   const el = document.getElementById('report');
 
+  const hideExactMatches = document.getElementById('hideExactMatches').checked;
+  const hideReviewedItems = document.getElementById('hideReviewedItems').checked;
   const ignoreLikelyAlive = document.getElementById('ignoreLikelyAlive').checked;
   const ignoreSimilarLocations = document.getElementById('ignoreSimilarLocations').checked;
   const aliveYears = parseInt(document.getElementById('aliveYears').value, 10);
@@ -1325,7 +1287,7 @@ function renderReport() {
       // A reviewed row is hidden unconditionally (unless "Show reviewed items" is
       // on) — it's excluded before any of the other filter logic even runs, since
       // once reviewed a row is simply done and shouldn't count toward the other stats.
-      if (reviewedIds.has(row.id) && !showReviewed) { hiddenReviewed++; continue; }
+      if (reviewedIds.has(row.id) && hideReviewedItems) { hiddenReviewed++; continue; }
       const likelyAlive = ignoreLikelyAlive && isLikelyAlive(row, aliveYears);
       if (row.status === 'missA' || row.status === 'missB') {
         // "Ignore all people likely still alive" removes missing-person rows for them.
