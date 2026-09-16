@@ -10,6 +10,7 @@
     --ink: #1f1d1b;
     --muted: #8a8580;
     --accent: #3d6b5c;
+    --accent-dark: #244438;
     --accent-soft: #e4efe9;
     --line: #e4e0da;
     --warn: #f4b942;
@@ -155,6 +156,20 @@
   .match-header-rel .rel-bracket { font-weight: 400; color: var(--muted); }
   .reviewed-inline { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; white-space: nowrap; }
   .reviewed-inline input[type="checkbox"] { cursor: pointer; }
+  .match-links { margin-bottom: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+  .match-header-name-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+  .ext-link {
+    display: inline-block;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 9px;
+    border-radius: 20px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    border: 1.5px solid var(--accent-dark);
+    text-decoration: none;
+  }
+  .ext-link:hover { text-decoration: underline; }
   .match-attrs table { border: none; }
   .diff-cell { background: var(--warn-soft); border-radius: 5px; padding: 2px 6px; }
   .diff-cell .a { color: var(--miss); }
@@ -472,6 +487,7 @@ function extractIndividual(node) {
   const sexNode = findChild(node, 'SEX');
   const famcNodes = findChildren(node, 'FAMC');
   const famsNodes = findChildren(node, 'FAMS');
+  const wwwNodes = findChildren(node, 'WWW');
   return {
     id: node.xref,
     name,
@@ -479,8 +495,54 @@ function extractIndividual(node) {
     birth: extractEvent(node, 'BIRT'),
     death: extractEvent(node, 'DEAT'),
     famc: famcNodes.map(n => (n.value || '').replace(/@/g, '')),
-    fams: famsNodes.map(n => (n.value || '').replace(/@/g, ''))
+    fams: famsNodes.map(n => (n.value || '').replace(/@/g, '')),
+    // Each WWW tag becomes a {url, label} pair via classifyWebLink() below —
+    // unparseable or non-http(s) values are dropped rather than guessed at.
+    links: wwwNodes.map(n => classifyWebLink(concValue(n))).filter(Boolean)
   };
+}
+
+// ---------- Web profile links (WWW tag) ----------
+// Turns a raw WWW-tag value into a {url, label} pair, where the label is
+// named after the domain: recognized genealogy sites get their proper name
+// (Ancestry, WikiTree, FamilySearch, ...); anything else falls back to
+// showing the bare domain itself rather than guessing at a friendly name.
+// Only http/https links are accepted — other schemes (or anything that fails
+// to parse as a URL at all) are treated as not-a-link and omitted, since a
+// wrong guess here is worse than no link at all.
+const KNOWN_GENEALOGY_DOMAINS = [
+  { match: 'ancestry', label: 'Ancestry' },
+  { match: 'wikitree', label: 'WikiTree' },
+  { match: 'familysearch', label: 'FamilySearch' },
+  { match: 'myheritage', label: 'MyHeritage' },
+  { match: 'findagrave', label: 'Find a Grave' },
+  { match: 'geni', label: 'Geni' }
+];
+
+function domainLabel(host) {
+  const labels = host.split('.');
+  for (const { match, label } of KNOWN_GENEALOGY_DOMAINS) {
+    if (labels.includes(match)) return label;
+  }
+  return host; // unrecognized domain — show the raw domain rather than guessing a name
+}
+
+function classifyWebLink(rawUrl) {
+  const raw = normVal(rawUrl);
+  if (!raw) return null;
+  let withScheme = raw;
+  if (!/^https?:\/\//i.test(raw)) {
+    if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) return null; // some other scheme (mailto:, ftp:, ...) — not a web profile link
+    withScheme = 'https://' + raw;
+  }
+  let host;
+  try {
+    host = new URL(withScheme).hostname.toLowerCase().replace(/^www\./, '');
+  } catch (e) {
+    return null; // not a parseable URL — omit rather than guess
+  }
+  if (!host) return null;
+  return { url: withScheme, label: domainLabel(host) };
 }
 
 function extractFamily(node) {
@@ -697,6 +759,20 @@ function combinedSex(indA, indB) {
   if (a === 'M' || a === 'F') return a;
   if (b === 'M' || b === 'F') return b;
   return '';
+}
+
+// Merges the WWW-tag links recorded on each side of a matched pair, de-duped
+// by URL (the same profile URL recorded in both files is only shown once).
+function combinedLinks(indA, indB) {
+  const all = [...((indA && indA.links) || []), ...((indB && indB.links) || [])];
+  const seen = new Set();
+  const out = [];
+  for (const l of all) {
+    if (seen.has(l.url)) continue;
+    seen.add(l.url);
+    out.push(l);
+  }
+  return out;
 }
 
 // role: 'Ancestor' | 'Sibling' | 'Spouse' | "Sibling's spouse" | a descendant
@@ -961,6 +1037,15 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+// Renders a person's WWW-tag links (already resolved to {url, label} pairs by
+// classifyWebLink) as small pill-style buttons. Returns '' when there's
+// nothing to show, so callers can splice it in unconditionally.
+function renderLinks(links) {
+  if (!links || !links.length) return '';
+  const items = links.map(l => `<a class="ext-link" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`).join('');
+  return `<div class="match-links">${items}</div>`;
+}
+
 function renderValueCell(f, ignoreSimilarLocations, locationThreshold) {
   const { a, b, same, type, similarity } = f;
   if (same) {
@@ -1032,7 +1117,7 @@ function runCompare() {
       const indA = dataA.individuals[idA];
       const indB = dataB.individuals[idB];
       const fieldDiffs = compareIndividuals(indA, indB);
-      rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), id: nextRowId(), ...relationshipInfo('Ancestor', code, 0, '') });
+      rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(), ...relationshipInfo('Ancestor', code, 0, '') });
       markShown(idA, idB);
     } else if (idA) {
       totalMissingB++;
@@ -1063,7 +1148,7 @@ function runCompare() {
       const fieldDiffs = compareIndividuals(indA, indB);
       rows.push({
         role: 'Sibling', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
-        name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), id: nextRowId(),
+        name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
         ...relationshipInfo('Sibling', code, null, combinedSex(indA, indB))
       });
       markShown(pair.aId, pair.bId);
@@ -1100,7 +1185,7 @@ function runCompare() {
       fieldDiffs.push({ label: 'Marriage place', a: marrA.place, b: marrB.place, same: fieldsEqual(marrA.place, marrB.place), type: 'place', similarity: placeSimilarity(marrA.place, marrB.place) });
       rows.push({
         role: 'Spouse', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
-        name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), id: nextRowId(),
+        name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
         ...relationshipInfo('Spouse', code, null, combinedSex(indA, indB))
       });
       markShown(pair.aId, pair.bId);
@@ -1138,7 +1223,7 @@ function runCompare() {
         const fieldDiffs = compareIndividuals(indA, indB);
         rows.push({
           role: "Sibling's spouse", status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full,
-          fieldDiffs, ...combinedLifeDates(indA, indB), id: nextRowId(),
+          fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
           ...relationshipInfo("Sibling's spouse", code, null, combinedSex(indA, indB))
         });
         markShown(pair.aId, pair.bId);
@@ -1177,7 +1262,7 @@ function runCompare() {
         const fieldDiffs = compareIndividuals(indA, indB);
         rows.push({
           role: label, status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full,
-          fieldDiffs, ...combinedLifeDates(indA, indB), id: nextRowId(),
+          fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
           ...relationshipInfo(label, code, genIndex, combinedSex(indA, indB))
         });
         markShown(pair.aId, pair.bId);
@@ -1208,7 +1293,7 @@ function runCompare() {
 function missingRow(role, status, indi) {
   return {
     role, status, name: indi.name.full, fieldDiffs: null,
-    birthDate: indi.birth.date, deathDate: indi.death.date, id: nextRowId()
+    birthDate: indi.birth.date, deathDate: indi.death.date, links: indi.links || [], id: nextRowId()
   };
 }
 
@@ -1373,7 +1458,10 @@ function renderReport() {
     html += `<div class="section">
       <div class="section-head">
         <div class="section-head-left">
-          <div class="match-header-name">${esc(ah.name || '(unnamed)')}${ahYearsSuffix}</div>
+          <div class="match-header-name-row">
+            <div class="match-header-name">${esc(ah.name || '(unnamed)')}${ahYearsSuffix}</div>
+            ${renderLinks(ah.links)}
+          </div>
           <div class="match-header-rel"><strong>${esc(ah.relationshipTerm || '')}</strong>${ah.pathDescription ? ` <span class="rel-bracket">(${esc(ah.pathDescription)})</span>` : ''}</div>
         </div>
         <span class="gen">generation ${section.gen}</span>
@@ -1395,7 +1483,10 @@ function renderReport() {
       // The Ancestor row's own name/relationship is already shown in the
       // section-head above, so its card skips repeating it.
       if (row.role !== 'Ancestor') {
-        html += `<div class="match-header-name">${esc(row.name || '(unnamed)')}${yearsSuffix}</div>
+        html += `<div class="match-header-name-row">
+          <div class="match-header-name">${esc(row.name || '(unnamed)')}${yearsSuffix}</div>
+          ${renderLinks(row.links)}
+        </div>
         <div class="match-header-rel"><strong>${esc(row.relationshipTerm || '')}</strong>${row.pathDescription ? ` <span class="rel-bracket">(${esc(row.pathDescription)})</span>` : ''}</div>`;
       }
       html += `<div class="match-attrs">`;
