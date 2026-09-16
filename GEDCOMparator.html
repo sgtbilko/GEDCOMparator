@@ -245,10 +245,6 @@
 
   <div class="report-controls" id="reportControls" style="display:none;">
     <div>
-      <input type="checkbox" id="hideReviewedItems" checked onchange="onFilterChange()" />
-      <label for="hideReviewedItems">Hide reviewed items</label>
-    </div>
-    <div>
       <input type="checkbox" id="hideExactMatches" checked onchange="onFilterChange()" />
       <label for="hideExactMatches">Hide exact matches</label>
     </div>
@@ -269,6 +265,10 @@
         <input type="range" id="locationThreshold" min="0" max="100" step="10" value="50" oninput="onFilterChange()" />
         <span id="locationThresholdVal">50%</span>)
       </span>
+    </div>
+    <div>
+      <input type="checkbox" id="hideReviewedItems" checked onchange="onFilterChange()" />
+      <label for="hideReviewedItems">Hide reviewed items</label>
     </div>
   </div>
 
