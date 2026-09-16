@@ -102,13 +102,16 @@
   }
   .section-head {
     background: var(--accent-soft);
-    padding: 10px 16px;
-    font-size: 13px;
-    font-weight: 600;
+    padding: 12px 16px;
     display: flex;
     justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
   }
-  .section-head .gen { color: var(--muted); font-weight: 400; font-size: 12px; }
+  .section-head-left { min-width: 0; }
+  .section-head .gen { color: var(--muted); font-weight: 400; font-size: 12px; white-space: nowrap; padding-top: 2px; }
+  .section-head .match-header-name { margin-bottom: 2px; }
+  .section-head .match-header-rel { margin-bottom: 0; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
   th { font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: 600; }
@@ -130,6 +133,17 @@
     text-transform: uppercase;
     letter-spacing: 0.03em;
   }
+  .match-card { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+  .match-card:last-child { border-bottom: none; }
+  .match-card.reviewed-row { opacity: 0.6; }
+  .match-card-topline { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+  .match-card-topline-left { display: flex; align-items: center; gap: 10px; }
+  .match-header-name { font-weight: 700; font-size: 15px; margin-bottom: 2px; }
+  .match-header-rel { font-size: 13px; margin-bottom: 10px; }
+  .match-header-rel .rel-bracket { font-weight: 400; color: var(--muted); }
+  .reviewed-inline { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+  .reviewed-inline input[type="checkbox"] { cursor: pointer; }
+  .match-attrs table { border: none; }
   .diff-cell { background: var(--warn-soft); border-radius: 5px; padding: 2px 6px; }
   .diff-cell .a { color: var(--miss); }
   .diff-cell .b { color: var(--accent); }
@@ -170,9 +184,6 @@
   /* Toggled/"revealed" state: label reads "Hide ..." — shown with a white background. */
   .toggle-btn.toggle-btn-hide { background: var(--card); color: var(--accent); }
   .toggle-btn.toggle-btn-hide:hover { background: var(--accent-soft); }
-  .reviewed-cell { text-align: center; }
-  .reviewed-cell input[type="checkbox"] { cursor: pointer; }
-  tr.reviewed-row td { opacity: 0.6; }
   .slider-wrap { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
   .slider-wrap input[type="range"] { width: 100px; margin-top: 0; accent-color: var(--accent); }
   .slider-wrap span#aliveYearsVal, .slider-wrap span#locationThresholdVal { color: var(--ink); font-weight: 600; min-width: 28px; }
@@ -554,6 +565,167 @@ function lineageLabel(code) {
 }
 
 function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+function decapitalize(s) { return s ? s.charAt(0).toLowerCase() + s.slice(1) : s; }
+
+// ---------- Relationship-to-root calculator ----------
+// Computes a standard English kinship term (e.g. "mother", "aunt",
+// "5x great-grandmother", "2nd cousin once removed") for any row in the report,
+// plus a plain-language "path description" bracket (e.g. "father's mother",
+// "father's mother's sibling") built from the existing lineage-code labelling.
+//
+// The core is the classic (u, v) cousin formula: u = generations from root UP
+// to the nearest common ancestor, v = generations from that common ancestor
+// DOWN to the target person.
+//  - v === 0: the target IS the common ancestor -> direct-line ancestor term.
+//  - u === 0: the common ancestor IS root -> direct-line descendant term.
+//  - min(u,v) === 1: an aunt/uncle (u>v), niece/nephew (u<v), or sibling (u=v).
+//  - min(u,v) >= 2: an Nth cousin, possibly "removed" by the generation gap.
+//
+// This is a best-effort standard approximation — it doesn't distinguish
+// full vs. half relations beyond the one case the app's data can actually see
+// (a same-generation relative reached via the "children of ancestors" option
+// rather than a direct shared-family sibling lookup), and spouses of direct
+// ancestors are labelled with the common "step-" terms rather than attempting
+// a cousin-style calculation (marriage isn't blood, so the formula doesn't
+// apply). The bracketed path description is always shown alongside the term
+// so the underlying lineage is never ambiguous even where the English term is
+// a simplification.
+
+function ordinalSuffix(n) {
+  const rem100 = n % 100;
+  if (rem100 >= 11 && rem100 <= 13) return 'th';
+  switch (n % 10) {
+    case 1: return 'st';
+    case 2: return 'nd';
+    case 3: return 'rd';
+    default: return 'th';
+  }
+}
+function ordinal(n) { return n + ordinalSuffix(n); }
+
+function removedPhrase(r) {
+  if (r <= 0) return '';
+  if (r === 1) return ' once removed';
+  if (r === 2) return ' twice removed';
+  return ` ${r} times removed`;
+}
+
+// n = number of "great"s; 0 -> '', 1 -> 'great-', 2+ -> 'Nx great-'.
+function greatPrefix(n) {
+  if (n <= 0) return '';
+  if (n === 1) return 'great-';
+  return `${n}x great-`;
+}
+
+function ancestorTerm(u, isMale) {
+  if (u === 1) return isMale ? 'father' : 'mother';
+  if (u === 2) return isMale ? 'grandfather' : 'grandmother';
+  return greatPrefix(u - 2) + (isMale ? 'grandfather' : 'grandmother');
+}
+
+function stepAncestorTerm(u, sex) {
+  const known = sex === 'M' || sex === 'F';
+  if (u === 1) return known ? (sex === 'M' ? 'step-father' : 'step-mother') : 'step-parent';
+  if (u === 2) return known ? (sex === 'M' ? 'step-grandfather' : 'step-grandmother') : 'step-grandparent';
+  const base = known ? (sex === 'M' ? 'grandfather' : 'grandmother') : 'grandparent';
+  return 'step-' + greatPrefix(u - 2) + base;
+}
+
+function descendantTerm(v, sex) {
+  const known = sex === 'M' || sex === 'F';
+  const isMale = sex === 'M';
+  const base1 = known ? (isMale ? 'son' : 'daughter') : 'child';
+  const baseN = known ? (isMale ? 'grandson' : 'granddaughter') : 'grandchild';
+  if (v === 1) return base1;
+  if (v === 2) return baseN;
+  return greatPrefix(v - 2) + baseN;
+}
+
+function auntUncleTerm(numGreats, sex) {
+  const known = sex === 'M' || sex === 'F';
+  const base = known ? (sex === 'M' ? 'uncle' : 'aunt') : 'aunt/uncle';
+  return greatPrefix(numGreats) + base;
+}
+
+function nieceNephewTerm(r, sex) {
+  const known = sex === 'M' || sex === 'F';
+  const base = known ? (sex === 'M' ? 'nephew' : 'niece') : 'niece/nephew';
+  if (r === 1) return base;
+  if (r === 2) return `grand-${base}`;
+  return greatPrefix(r - 2) + `grand-${base}`;
+}
+
+function siblingTerm(sex, half) {
+  const known = sex === 'M' || sex === 'F';
+  const base = known ? (sex === 'M' ? 'brother' : 'sister') : 'sibling';
+  return half ? `half-${base}` : base;
+}
+
+function spouseTerm(sex) {
+  if (sex === 'M') return 'husband';
+  if (sex === 'F') return 'wife';
+  return 'spouse';
+}
+
+function relationshipFromUV(u, v, sex, half) {
+  if (u === 0 && v === 0) return 'root';
+  if (v === 0) return ancestorTerm(u, sex === 'M');
+  if (u === 0) return descendantTerm(v, sex);
+  const minUV = Math.min(u, v);
+  const removed = Math.abs(u - v);
+  if (minUV === 1) {
+    if (removed === 0) return siblingTerm(sex, half);
+    if (u > v) return auntUncleTerm(removed - 1, sex);
+    return nieceNephewTerm(removed, sex);
+  }
+  return `${ordinal(minUV - 1)} cousin${removedPhrase(removed)}`;
+}
+
+// Combines two individuals' recorded sex the same way combinedLifeDates()
+// combines dates: prefer whichever side actually has it recorded.
+function combinedSex(indA, indB) {
+  const a = indA && normVal(indA.sex);
+  const b = indB && normVal(indB.sex);
+  if (a === 'M' || a === 'F') return a;
+  if (b === 'M' || b === 'F') return b;
+  return '';
+}
+
+// role: 'Ancestor' | 'Sibling' | 'Spouse' | "Sibling's spouse" | a descendant
+// label ('Child', 'Grandchild', 'Great-grandchild', ...). code: the lineage
+// code of this section (e.g. 'FM'). depth: descendant depth (1 = child), only
+// meaningful for descendant roles. sex: 'M' / 'F' / '' for the row's person —
+// ignored for 'Ancestor' rows, whose gender comes from the code itself.
+function relationshipInfo(role, code, depth, sex) {
+  const L = code.length;
+  const isRootSection = code === '';
+  const pathLower = isRootSection ? '' : decapitalize(lineageLabel(code));
+
+  if (role === 'Ancestor') {
+    if (isRootSection) return { relationshipTerm: 'Root', pathDescription: null };
+    const codeGenderSex = code[L - 1] === 'F' ? 'M' : 'F';
+    return { relationshipTerm: capitalize(relationshipFromUV(L, 0, codeGenderSex, false)), pathDescription: pathLower };
+  }
+  if (role === 'Sibling') {
+    const term = relationshipFromUV(L + 1, 1, sex, false);
+    return { relationshipTerm: capitalize(term), pathDescription: isRootSection ? 'sibling' : `${pathLower}'s sibling` };
+  }
+  if (role === "Sibling's spouse") {
+    const term = relationshipFromUV(L + 1, 1, sex, false);
+    return { relationshipTerm: capitalize(term), pathDescription: isRootSection ? "sibling's spouse" : `${pathLower}'s sibling's spouse` };
+  }
+  if (role === 'Spouse') {
+    const term = isRootSection ? spouseTerm(sex) : stepAncestorTerm(L, sex);
+    return { relationshipTerm: capitalize(term), pathDescription: isRootSection ? 'spouse' : `${pathLower}'s spouse` };
+  }
+  // Descendant roles ('Child', 'Grandchild', ...). half only applies to the one
+  // ambiguous case the "children of ancestors" option can surface: a same-
+  // generation relative (L === 1, depth === 1) found via that option rather
+  // than the direct shared-family sibling lookup, i.e. a half-sibling.
+  const half = (L === 1 && depth === 1);
+  const term = relationshipFromUV(L, depth, sex, half);
+  return { relationshipTerm: capitalize(term), pathDescription: isRootSection ? role.toLowerCase() : `${pathLower}'s ${role.toLowerCase()}` };
+}
 
 // ---------- Matching helpers ----------
 
@@ -851,19 +1023,24 @@ function runCompare() {
       const indA = dataA.individuals[idA];
       const indB = dataB.individuals[idB];
       const fieldDiffs = compareIndividuals(indA, indB);
-      rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), id: nextRowId() });
+      rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), id: nextRowId(), ...relationshipInfo('Ancestor', code, 0, '') });
       markShown(idA, idB);
     } else if (idA) {
       totalMissingB++;
-      rows.push(missingRow('Ancestor', 'missB', dataA.individuals[idA]));
+      rows.push({ ...missingRow('Ancestor', 'missB', dataA.individuals[idA]), ...relationshipInfo('Ancestor', code, 0, '') });
       markShown(idA, null);
     } else if (idB) {
       totalMissingA++;
-      rows.push(missingRow('Ancestor', 'missA', dataB.individuals[idB]));
+      rows.push({ ...missingRow('Ancestor', 'missA', dataB.individuals[idB]), ...relationshipInfo('Ancestor', code, 0, '') });
       markShown(null, idB);
     } else {
       continue;
     }
+
+    // The ancestor row (always the first one pushed above) carries exactly the
+    // header content the section-head bar now shows, so we don't need to
+    // duplicate the name/relationship computation here.
+    const ancestorHeader = rows[0];
 
     // --- siblings (only when "Include siblings of ancestors" is enabled) ---
     const sibsA = (includeSiblings && idA) ? getSiblings(dataA, idA) : [];
@@ -877,20 +1054,21 @@ function runCompare() {
       const fieldDiffs = compareIndividuals(indA, indB);
       rows.push({
         role: 'Sibling', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
-        name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), id: nextRowId()
+        name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), id: nextRowId(),
+        ...relationshipInfo('Sibling', code, null, combinedSex(indA, indB))
       });
       markShown(pair.aId, pair.bId);
     }
     for (const aId of sibMatch.missingInB) {
       if (isAlreadyCovered(aId, null)) continue;
       totalMissingB++;
-      rows.push(missingRow('Sibling', 'missB', dataA.individuals[aId]));
+      rows.push({ ...missingRow('Sibling', 'missB', dataA.individuals[aId]), ...relationshipInfo('Sibling', code, null, normVal(dataA.individuals[aId].sex)) });
       markShown(aId, null);
     }
     for (const bId of sibMatch.missingInA) {
       if (isAlreadyCovered(null, bId)) continue;
       totalMissingA++;
-      rows.push(missingRow('Sibling', 'missA', dataB.individuals[bId]));
+      rows.push({ ...missingRow('Sibling', 'missA', dataB.individuals[bId]), ...relationshipInfo('Sibling', code, null, normVal(dataB.individuals[bId].sex)) });
       markShown(null, bId);
     }
 
@@ -913,20 +1091,21 @@ function runCompare() {
       fieldDiffs.push({ label: 'Marriage place', a: marrA.place, b: marrB.place, same: fieldsEqual(marrA.place, marrB.place), type: 'place', similarity: placeSimilarity(marrA.place, marrB.place) });
       rows.push({
         role: 'Spouse', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
-        name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), id: nextRowId()
+        name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), id: nextRowId(),
+        ...relationshipInfo('Spouse', code, null, combinedSex(indA, indB))
       });
       markShown(pair.aId, pair.bId);
     }
     for (const aId of spouseMatch.missingInB) {
       if (isAlreadyCovered(aId, null)) continue;
       totalMissingB++;
-      rows.push(missingRow('Spouse', 'missB', dataA.individuals[aId]));
+      rows.push({ ...missingRow('Spouse', 'missB', dataA.individuals[aId]), ...relationshipInfo('Spouse', code, null, normVal(dataA.individuals[aId].sex)) });
       markShown(aId, null);
     }
     for (const bId of spouseMatch.missingInA) {
       if (isAlreadyCovered(null, bId)) continue;
       totalMissingA++;
-      rows.push(missingRow('Spouse', 'missA', dataB.individuals[bId]));
+      rows.push({ ...missingRow('Spouse', 'missA', dataB.individuals[bId]), ...relationshipInfo('Spouse', code, null, normVal(dataB.individuals[bId].sex)) });
       markShown(null, bId);
     }
 
@@ -948,17 +1127,23 @@ function runCompare() {
         const indA = dataA.individuals[pair.aId];
         const indB = dataB.individuals[pair.bId];
         const fieldDiffs = compareIndividuals(indA, indB);
-        rows.push({ role: "Sibling's spouse", status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), id: nextRowId() });
+        rows.push({
+          role: "Sibling's spouse", status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full,
+          fieldDiffs, ...combinedLifeDates(indA, indB), id: nextRowId(),
+          ...relationshipInfo("Sibling's spouse", code, null, combinedSex(indA, indB))
+        });
         markShown(pair.aId, pair.bId);
       }
       for (const aId of m.missingInB) {
         if (isAlreadyCovered(aId, null)) continue;
-        totalMissingB++; rows.push(missingRow("Sibling's spouse", 'missB', dataA.individuals[aId]));
+        totalMissingB++;
+        rows.push({ ...missingRow("Sibling's spouse", 'missB', dataA.individuals[aId]), ...relationshipInfo("Sibling's spouse", code, null, normVal(dataA.individuals[aId].sex)) });
         markShown(aId, null);
       }
       for (const bId of m.missingInA) {
         if (isAlreadyCovered(null, bId)) continue;
-        totalMissingA++; rows.push(missingRow("Sibling's spouse", 'missA', dataB.individuals[bId]));
+        totalMissingA++;
+        rows.push({ ...missingRow("Sibling's spouse", 'missA', dataB.individuals[bId]), ...relationshipInfo("Sibling's spouse", code, null, normVal(dataB.individuals[bId].sex)) });
         markShown(null, bId);
       }
     }
@@ -981,25 +1166,29 @@ function runCompare() {
         const indA = dataA.individuals[pair.aId];
         const indB = dataB.individuals[pair.bId];
         const fieldDiffs = compareIndividuals(indA, indB);
-        rows.push({ role: label, status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), id: nextRowId() });
+        rows.push({
+          role: label, status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full,
+          fieldDiffs, ...combinedLifeDates(indA, indB), id: nextRowId(),
+          ...relationshipInfo(label, code, genIndex, combinedSex(indA, indB))
+        });
         markShown(pair.aId, pair.bId);
         addDescendantRows(pair.aId, pair.bId, depthRemaining - 1, genIndex + 1, rows);
       }
       for (const id of m.missingInB) {
         totalMissingB++;
-        rows.push(missingRow(label, 'missB', dataA.individuals[id]));
+        rows.push({ ...missingRow(label, 'missB', dataA.individuals[id]), ...relationshipInfo(label, code, genIndex, normVal(dataA.individuals[id].sex)) });
         markShown(id, null);
         addDescendantRows(id, null, depthRemaining - 1, genIndex + 1, rows);
       }
       for (const id of m.missingInA) {
         totalMissingA++;
-        rows.push(missingRow(label, 'missA', dataB.individuals[id]));
+        rows.push({ ...missingRow(label, 'missA', dataB.individuals[id]), ...relationshipInfo(label, code, genIndex, normVal(dataB.individuals[id].sex)) });
         markShown(null, id);
         addDescendantRows(null, id, depthRemaining - 1, genIndex + 1, rows);
       }
     }
 
-    sections.push({ code, label: lineageLabel(code), gen: code.length, rows });
+    sections.push({ code, label: lineageLabel(code), gen: code.length, rows, ancestorHeader });
   }
 
   lastSections = sections;
@@ -1033,6 +1222,17 @@ function isLikelyAlive(row, maxYears) {
   if (!yr) return false;
   const age = new Date().getFullYear() - parseInt(yr, 10);
   return age >= 0 && age <= maxYears;
+}
+
+// Builds the " (DoB-DoD)" suffix for a match's header name line, using just the
+// years (per the requested "Forename Surname (DoB-DoD)" format). A '?' fills in
+// for a year we don't have on either side; if we have neither year at all, the
+// suffix is omitted entirely rather than showing "(?-?)".
+function matchYearsSuffix(row) {
+  const by = extractYear(row.birthDate);
+  const dy = extractYear(row.deathDate);
+  if (!by && !dy) return '';
+  return ` (${by || '?'}-${dy || '?'})`;
 }
 
 // Whether a matched row still counts as "different" once the active filters are applied.
@@ -1176,18 +1376,37 @@ function renderReport() {
   }
 
   for (const section of visibleSections) {
+    const ah = section.ancestorHeader;
+    const ahYearsSuffix = matchYearsSuffix(ah);
     html += `<div class="section">
-      <div class="section-head"><span>${esc(section.label)}</span><span class="gen">generation ${section.gen}</span></div>
-      <table>
-        <thead><tr><th style="width:12%">Role</th><th style="width:18%">Individual</th><th style="width:12%">Status</th><th>Attributes</th><th style="width:9%">Reviewed</th></tr></thead>
-        <tbody>`;
+      <div class="section-head">
+        <div class="section-head-left">
+          <div class="match-header-name">${esc(ah.name || '(unnamed)')}${ahYearsSuffix}</div>
+          <div class="match-header-rel"><strong>${esc(ah.relationshipTerm || '')}</strong>${ah.pathDescription ? ` <span class="rel-bracket">(${esc(ah.pathDescription)})</span>` : ''}</div>
+        </div>
+        <span class="gen">generation ${section.gen}</span>
+      </div>`;
     for (const row of section.rows) {
       const isReviewed = reviewedIds.has(row.id);
-      html += `<tr${isReviewed ? ' class="reviewed-row"' : ''}>
-        <td class="role-tag">${esc(row.role)}</td>
-        <td>${esc(row.name || '(unnamed)')}</td>
-        <td>${statusBadge(row.status)}</td>
-        <td>`;
+      const yearsSuffix = matchYearsSuffix(row);
+      html += `<div class="match-card${isReviewed ? ' reviewed-row' : ''}">
+        <div class="match-card-topline">
+          <div class="match-card-topline-left">
+            <span class="role-tag">${esc(row.role)}</span>
+            ${statusBadge(row.status)}
+          </div>
+          <label class="reviewed-inline">
+            <input type="checkbox" ${isReviewed ? 'checked' : ''} onchange="toggleReviewed(${row.id}, this.checked)" />
+            Reviewed
+          </label>
+        </div>`;
+      // The Ancestor row's own name/relationship is already shown in the
+      // section-head above, so its card skips repeating it.
+      if (row.role !== 'Ancestor') {
+        html += `<div class="match-header-name">${esc(row.name || '(unnamed)')}${yearsSuffix}</div>
+        <div class="match-header-rel"><strong>${esc(row.relationshipTerm || '')}</strong>${row.pathDescription ? ` <span class="rel-bracket">(${esc(row.pathDescription)})</span>` : ''}</div>`;
+      }
+      html += `<div class="match-attrs">`;
       if (row.fieldDiffs) {
         html += `<table style="border:none;">`;
         for (const f of row.fieldDiffs) {
@@ -1198,11 +1417,9 @@ function renderReport() {
         const aliveNote = isLikelyAlive(row, aliveYears) ? ' <span class="empty-val">(possibly still living)</span>' : '';
         html += `<span class="empty-val">Not present to compare — add to the missing file.</span>${aliveNote}`;
       }
-      html += `</td>
-        <td class="reviewed-cell"><input type="checkbox" ${isReviewed ? 'checked' : ''} onchange="toggleReviewed(${row.id}, this.checked)" /></td>
-      </tr>`;
+      html += `</div></div>`;
     }
-    html += `</tbody></table></div>`;
+    html += `</div>`;
   }
 
   el.innerHTML = html;
