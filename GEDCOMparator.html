@@ -526,22 +526,47 @@ function matchLists(dataA, listA, dataB, listB) {
   const remainingB = listB.slice();
   const pairs = [];
 
-  // pass 1: exact normalized name match, prefer matching birth year
+  // pass 1: exact normalized name match, narrowed by birth year (then death year)
+  // when more than one candidate shares that name.
+  //
+  // Bug fix: previously, if narrowing by birth year still left more than one
+  // candidate (e.g. two same-named relatives and no birth year recorded on the
+  // File A side to tell them apart), the code fell through and silently picked
+  // candidates[0] with confidence 'match' anyway — a fully-confident "in both
+  // files" pairing built on an arbitrary guess. Whichever same-named individual
+  // happened to come first in File B's sibling/child order "won", even if it was
+  // the wrong one, so that person's blank fields (e.g. no birth place recorded)
+  // displaced the real match — whose data (e.g. an actual, filled-in birth
+  // place) then got reported as missing entirely. Now: if candidates are still
+  // tied after trying birth year and death year, the match is only ever offered
+  // at 'maybe' confidence, so the report is honest about the ambiguity instead
+  // of hiding it behind a false-confident match.
   for (const aId of listA.slice()) {
     const aInd = dataA.individuals[aId];
     const aName = normalizeName(aInd.name.full);
-    const aYear = extractYear(aInd.birth.date);
     let candidates = remainingB.filter(bId => normalizeName(dataB.individuals[bId].name.full) === aName);
-    if (candidates.length > 1 && aYear) {
-      const withYear = candidates.filter(bId => extractYear(dataB.individuals[bId].birth.date) === aYear);
-      if (withYear.length) candidates = withYear;
+    if (!candidates.length) continue;
+
+    if (candidates.length > 1) {
+      const aBirthYear = extractYear(aInd.birth.date);
+      if (aBirthYear) {
+        const withBirthYear = candidates.filter(bId => extractYear(dataB.individuals[bId].birth.date) === aBirthYear);
+        if (withBirthYear.length) candidates = withBirthYear;
+      }
     }
-    if (candidates.length) {
-      const bId = candidates[0];
-      pairs.push({ aId, bId, confidence: 'match' });
-      remainingB.splice(remainingB.indexOf(bId), 1);
-      listA.splice(listA.indexOf(aId), 1);
+    if (candidates.length > 1) {
+      const aDeathYear = extractYear(aInd.death.date);
+      if (aDeathYear) {
+        const withDeathYear = candidates.filter(bId => extractYear(dataB.individuals[bId].death.date) === aDeathYear);
+        if (withDeathYear.length) candidates = withDeathYear;
+      }
     }
+
+    const ambiguous = candidates.length > 1;
+    const bId = candidates[0];
+    pairs.push({ aId, bId, confidence: ambiguous ? 'maybe' : 'match' });
+    remainingB.splice(remainingB.indexOf(bId), 1);
+    listA.splice(listA.indexOf(aId), 1);
   }
 
   // pass 2: same birth year, no name match (possible spelling variants) -- only if unique
@@ -658,8 +683,10 @@ function dateMidpointDays(p) {
 //    same underlying date — since a vague Bef/Aft value should be tightened to the most
 //    restrictive known date rather than treated as interchangeable with a different one, or
 //  - exactly one is Bef/Aft-qualified -> never a match (precision isn't comparable), or
-//  - otherwise, a flat 3-month (91 day) tolerance applies whenever either side isn't a full
-//    exact date; two exact dates must match to the day.
+//  - otherwise, a precise (EXACT: full day/month/year) date on either side gets NO tolerance —
+//    it must line up to the day. The flat 3-month (91 day) tolerance only kicks in when BOTH
+//    sides are approximate (About/Year), since fuzzy-vs-fuzzy is where "close enough" makes sense;
+//    a precise date is a firm claim and should never be waved through as "probably the same".
 function datesMatch(rawA, rawB) {
   const a = normVal(rawA), b = normVal(rawB);
   if (!a && !b) return true;
@@ -673,8 +700,8 @@ function datesMatch(rawA, rawB) {
       pa.year === pb.year && pa.month === pb.month && pa.day === pb.day;
   }
   if (aIsBefAft !== bIsBefAft) return false;
-  const bothExact = pa.tier === 'EXACT' && pb.tier === 'EXACT';
-  const tolerance = bothExact ? 0 : 91;
+  const eitherExact = pa.tier === 'EXACT' || pb.tier === 'EXACT';
+  const tolerance = eitherExact ? 0 : 91;
   return Math.abs(dateMidpointDays(pa) - dateMidpointDays(pb)) <= tolerance;
 }
 
