@@ -231,12 +231,12 @@
 
   <div class="report-controls" id="reportControls" style="display:none;">
     <div>
-      <input type="checkbox" id="hideExactMatches" onchange="onFilterChange()" />
+      <input type="checkbox" id="hideExactMatches" checked onchange="onFilterChange()" />
       <label for="hideExactMatches">Hide exact matches</label>
     </div>
     <div>
-      <input type="checkbox" id="ignoreAliveMissing" onchange="onFilterChange()" />
-      <label for="ignoreAliveMissing">Ignore missing people likely still alive</label>
+      <input type="checkbox" id="ignoreLikelyAlive" onchange="onFilterChange()" />
+      <label for="ignoreLikelyAlive">Ignore all people likely still alive</label>
       <span class="slider-wrap">
         (no death date, born within last
         <input type="range" id="aliveYears" min="60" max="100" step="10" value="80" oninput="onFilterChange()" />
@@ -827,7 +827,7 @@ function runCompare() {
       const indA = dataA.individuals[idA];
       const indB = dataB.individuals[idB];
       const fieldDiffs = compareIndividuals(indA, indB);
-      rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs });
+      rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB) });
       markShown(idA, idB);
     } else if (idA) {
       totalMissingB++;
@@ -853,7 +853,7 @@ function runCompare() {
       const fieldDiffs = compareIndividuals(indA, indB);
       rows.push({
         role: 'Sibling', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
-        name: indA.name.full || indB.name.full, fieldDiffs
+        name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB)
       });
       markShown(pair.aId, pair.bId);
     }
@@ -889,7 +889,7 @@ function runCompare() {
       fieldDiffs.push({ label: 'Marriage place', a: marrA.place, b: marrB.place, same: fieldsEqual(marrA.place, marrB.place), type: 'place', similarity: placeSimilarity(marrA.place, marrB.place) });
       rows.push({
         role: 'Spouse', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
-        name: indA.name.full || indB.name.full, fieldDiffs
+        name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB)
       });
       markShown(pair.aId, pair.bId);
     }
@@ -924,7 +924,7 @@ function runCompare() {
         const indA = dataA.individuals[pair.aId];
         const indB = dataB.individuals[pair.bId];
         const fieldDiffs = compareIndividuals(indA, indB);
-        rows.push({ role: "Sibling's spouse", status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full, fieldDiffs });
+        rows.push({ role: "Sibling's spouse", status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB) });
         markShown(pair.aId, pair.bId);
       }
       for (const aId of m.missingInB) {
@@ -957,7 +957,7 @@ function runCompare() {
         const indA = dataA.individuals[pair.aId];
         const indB = dataB.individuals[pair.bId];
         const fieldDiffs = compareIndividuals(indA, indB);
-        rows.push({ role: label, status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full, fieldDiffs });
+        rows.push({ role: label, status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB) });
         markShown(pair.aId, pair.bId);
         addDescendantRows(pair.aId, pair.bId, depthRemaining - 1, genIndex + 1, rows);
       }
@@ -990,8 +990,19 @@ function missingRow(role, status, indi) {
   };
 }
 
-// A missing person is treated as "likely still alive" only when we have a birth year,
-// there's no recorded death, and that birth year is within the given number of years.
+// For a matched pair (present in both files), combine their birth/death dates so
+// "likely still alive" can be evaluated the same way as for a missing person: a
+// death date recorded on EITHER side counts as evidence of death, and the birth
+// date is taken from whichever side has one recorded.
+function combinedLifeDates(indA, indB) {
+  const birthDate = (indA && normVal(indA.birth.date)) || (indB && normVal(indB.birth.date)) || '';
+  const deathDate = (indA && normVal(indA.death.date)) || (indB && normVal(indB.death.date)) || '';
+  return { birthDate, deathDate };
+}
+
+// A person is treated as "likely still alive" only when we have a birth year,
+// there's no recorded death (on either side, for a matched pair), and that birth
+// year is within the given number of years.
 function isLikelyAlive(row, maxYears) {
   if (normVal(row.deathDate)) return false;
   const yr = extractYear(row.birthDate);
@@ -1029,7 +1040,7 @@ function renderReport() {
   const el = document.getElementById('report');
 
   const hideExactMatches = document.getElementById('hideExactMatches').checked;
-  const ignoreAliveMissing = document.getElementById('ignoreAliveMissing').checked;
+  const ignoreLikelyAlive = document.getElementById('ignoreLikelyAlive').checked;
   const ignoreSimilarLocations = document.getElementById('ignoreSimilarLocations').checked;
   const aliveYears = parseInt(document.getElementById('aliveYears').value, 10);
   const locationThresholdPct = parseInt(document.getElementById('locationThreshold').value, 10);
@@ -1044,8 +1055,10 @@ function renderReport() {
   for (const section of lastSections) {
     const visibleRows = [];
     for (const row of section.rows) {
+      const likelyAlive = ignoreLikelyAlive && isLikelyAlive(row, aliveYears);
       if (row.status === 'missA' || row.status === 'missB') {
-        if (ignoreAliveMissing && isLikelyAlive(row, aliveYears)) { hiddenAlive++; continue; }
+        // "Ignore all people likely still alive" removes missing-person rows for them.
+        if (likelyAlive) { hiddenAlive++; continue; }
         if (row.status === 'missA') totalMissingA++; else totalMissingB++;
         visibleRows.push(row);
         continue;
@@ -1054,6 +1067,10 @@ function renderReport() {
       const hasDiff = rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold);
       totalCompared++;
       if (hasDiff) totalWithDiffs++;
+      // It also removes matched rows with mismatched data for a likely-living person.
+      // Exact matches for likely-living people are unaffected by this option — those
+      // are controlled separately by "Hide exact matches".
+      if (likelyAlive && hasDiff) { hiddenAlive++; continue; }
       if (hideExactMatches && !hasDiff) { hiddenExact++; continue; }
       visibleRows.push(row);
     }
@@ -1069,10 +1086,10 @@ function renderReport() {
     <div class="card"><div class="num">${totalMissingB}</div><div class="lbl">Missing from File B shown</div></div>
   </div>`;
 
-  if (hideExactMatches || ignoreAliveMissing) {
+  if (hideExactMatches || ignoreLikelyAlive) {
     const bits = [];
     if (hideExactMatches) bits.push(`${hiddenExact} exact match${hiddenExact === 1 ? '' : 'es'} hidden`);
-    if (ignoreAliveMissing) bits.push(`${hiddenAlive} likely-living missing ${hiddenAlive === 1 ? 'person' : 'people'} hidden`);
+    if (ignoreLikelyAlive) bits.push(`${hiddenAlive} likely-living ${hiddenAlive === 1 ? 'person' : 'people'} hidden`);
     html += `<div class="legend">${bits.join(' · ')}</div>`;
   }
 
