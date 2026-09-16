@@ -94,6 +94,8 @@
     min-width: 140px;
   }
   /* Same amber used to highlight differences in the list (.diff-cell). */
+  .summary .card.matches { background: var(--accent-soft); border-color: var(--accent); }
+  .summary .card.matches .num { color: var(--accent); }
   .summary .card.diffs { background: var(--warn-soft); border-color: var(--warn); }
   .summary .card.diffs .num { color: #8a6d1f; }
   .summary .card.missA { background: var(--miss-soft); border-color: var(--miss); }
@@ -1335,7 +1337,7 @@ function renderReport() {
   let html = '';
 
   html += `<div class="summary">
-    <div class="card"><div class="num">${totalCompared}</div><div class="lbl">Individuals matched &amp; compared</div></div>
+    <div class="card matches"><div class="num">${totalCompared}</div><div class="lbl">Individuals matched &amp; compared</div></div>
     <div class="card diffs"><div class="num">${totalWithDiffs}</div><div class="lbl">Matched with attribute differences</div></div>
     <div class="card missA"><div class="num">${totalMissingA}</div><div class="lbl">Missing from File A shown</div></div>
     <div class="card missB"><div class="num">${totalMissingB}</div><div class="lbl">Missing from File B shown</div></div>
