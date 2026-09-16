@@ -164,12 +164,17 @@
     font-weight: 600;
     padding: 2px 9px;
     border-radius: 20px;
-    background: var(--accent-soft);
-    color: var(--accent);
+    background: var(--accent);
+    color: #ffffff;
     border: 1.5px solid var(--accent-dark);
     text-decoration: none;
   }
   .ext-link:hover { text-decoration: underline; }
+  .ext-link-nearest {
+    background: var(--warn);
+    color: #6b4e0c;
+    border: 1.5px solid #c9932b;
+  }
   .match-attrs table { border: none; }
   .diff-cell { background: var(--warn-soft); border-radius: 5px; padding: 2px 6px; }
   .diff-cell .a { color: var(--miss); }
@@ -548,6 +553,121 @@ function classifyWebLink(rawUrl) {
   }
   if (!host) return null;
   return { url: withScheme, label: domainLabel(host) };
+}
+
+// ---------- "Nearest WikiTree" fallback ----------
+// When a person has no WikiTree link of their own, we look outward from their
+// own record(s) for the closest relative who does, in a fixed preference
+// order: spouse, then child, then parent, then any other descendant
+// (grandchild or further). Each tier is checked across BOTH files before
+// moving to the next tier, since a spouse recorded only in File B should
+// still win over a child recorded in File A. Returns null when nothing in
+// that scope has a WikiTree link — callers should then simply omit the button.
+function hasWikiTreeLink(links) {
+  return !!(links && links.some(l => l.label === 'WikiTree'));
+}
+
+function wikiTreeUrlOf(ind) {
+  const l = ind && ind.links && ind.links.find(l2 => l2.label === 'WikiTree');
+  return l ? l.url : null;
+}
+
+// A relative found while walking one file's family tree (say, via a person who
+// only exists in File A) might themselves be recorded in the OTHER file too —
+// with their WikiTree link only present on that other side. Without checking
+// for a counterpart, that link would be invisible from the File A-only walk.
+// This only trusts a UNIQUE normalized-name match (narrowed by birth year when
+// there's more than one candidate), matching the same "don't guess" standard
+// matchLists() already applies elsewhere in the report — an ambiguous name
+// collision across the whole file is not treated as a match.
+function findCounterpartInOtherFile(ind, otherData) {
+  if (!ind || !otherData) return null;
+  const name = normalizeName(ind.name.full);
+  if (!name) return null;
+  let candidates = Object.values(otherData.individuals).filter(o => normalizeName(o.name.full) === name);
+  if (candidates.length > 1) {
+    const year = extractYear(ind.birth.date);
+    if (year) {
+      const withYear = candidates.filter(o => extractYear(o.birth.date) === year);
+      if (withYear.length) candidates = withYear;
+    }
+  }
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+// Checks a candidate's own WikiTree link first, then — only if that comes up
+// empty — their counterpart in the other file (see findCounterpartInOtherFile).
+function wikiTreeUrlConsideringCounterpart(ind, otherData) {
+  if (!ind) return null;
+  const own = wikiTreeUrlOf(ind);
+  if (own) return own;
+  return wikiTreeUrlOf(findCounterpartInOtherFile(ind, otherData));
+}
+
+function firstWikiTreeUrl(candidates) {
+  for (const c of candidates) {
+    const url = wikiTreeUrlConsideringCounterpart(c.ind, c.other);
+    if (url) return url;
+  }
+  return null;
+}
+
+// Descendants two or more generations down (grandchildren, great-grandchildren, …) —
+// i.e. anyone reachable via getChildren() who is not a direct child.
+function getDeeperDescendants(data, indiId) {
+  if (!indiId) return [];
+  const directChildren = getChildren(data, indiId);
+  const seen = new Set(directChildren);
+  const out = [];
+  let queue = [];
+  for (const childId of directChildren) queue.push(...getChildren(data, childId));
+  while (queue.length) {
+    const id = queue.shift();
+    if (seen.has(id)) continue;
+    seen.add(id);
+    if (data.individuals[id]) out.push(data.individuals[id]);
+    queue.push(...getChildren(data, id));
+  }
+  return out;
+}
+
+// Wraps each candidate individual with a reference to "the other file", so
+// firstWikiTreeUrl can fall back to a counterpart lookup when the candidate's
+// own record (found via just one file) has no WikiTree link.
+function withOther(individuals, other) {
+  return individuals.filter(Boolean).map(ind => ({ ind, other }));
+}
+
+function findNearestWikiTreeUrl(dataA, dataB, aId, bId) {
+  // Tier 1: spouse(s)
+  let candidates = [];
+  if (aId) candidates.push(...withOther(getSpousesWithMarriage(dataA, aId).map(s => dataA.individuals[s.spouseId]), dataB));
+  if (bId) candidates.push(...withOther(getSpousesWithMarriage(dataB, bId).map(s => dataB.individuals[s.spouseId]), dataA));
+  let url = firstWikiTreeUrl(candidates);
+  if (url) return url;
+
+  // Tier 2: child(ren)
+  candidates = [];
+  if (aId) candidates.push(...withOther(getChildren(dataA, aId).map(id => dataA.individuals[id]), dataB));
+  if (bId) candidates.push(...withOther(getChildren(dataB, bId).map(id => dataB.individuals[id]), dataA));
+  url = firstWikiTreeUrl(candidates);
+  if (url) return url;
+
+  // Tier 3: parent(s)
+  candidates = [];
+  if (aId) { const p = getParents(dataA, aId); candidates.push(...withOther([dataA.individuals[p.father], dataA.individuals[p.mother]], dataB)); }
+  if (bId) { const p = getParents(dataB, bId); candidates.push(...withOther([dataB.individuals[p.father], dataB.individuals[p.mother]], dataA)); }
+  url = firstWikiTreeUrl(candidates);
+  if (url) return url;
+
+  // Tier 4: any other descendant (grandchild or further)
+  candidates = [];
+  if (aId) candidates.push(...withOther(getDeeperDescendants(dataA, aId), dataB));
+  if (bId) candidates.push(...withOther(getDeeperDescendants(dataB, bId), dataA));
+  url = firstWikiTreeUrl(candidates);
+  if (url) return url;
+
+  return null;
 }
 
 function extractFamily(node) {
@@ -1043,12 +1163,21 @@ function escapeHtml(s) {
 }
 
 // Renders a person's WWW-tag links (already resolved to {url, label} pairs by
-// classifyWebLink) as small pill-style buttons. Returns '' when there's
-// nothing to show, so callers can splice it in unconditionally.
-function renderLinks(links) {
-  if (!links || !links.length) return '';
-  const items = links.map(l => `<a class="ext-link" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`).join('');
-  return `<div class="match-links">${items}</div>`;
+// classifyWebLink) as small pill-style buttons, plus — when the person has no
+// WikiTree link of their own — an extra amber "Nearest WikiTree" pill pointing
+// to the closest relative's WikiTree profile (see findNearestWikiTreeUrl).
+// Returns '' when there's nothing to show at all, so callers can splice it in
+// unconditionally.
+function renderLinks(links, nearestWikiTreeUrl) {
+  const items = [];
+  if (links && links.length) {
+    items.push(...links.map(l => `<a class="ext-link" href="${esc(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.label)}</a>`));
+  }
+  if (nearestWikiTreeUrl) {
+    items.push(`<a class="ext-link ext-link-nearest" href="${esc(nearestWikiTreeUrl)}" target="_blank" rel="noopener noreferrer">Nearest WikiTree</a>`);
+  }
+  if (!items.length) return '';
+  return `<div class="match-links">${items.join('')}</div>`;
 }
 
 function renderValueCell(f, ignoreSimilarLocations, locationThreshold) {
@@ -1122,7 +1251,7 @@ function runCompare() {
       const indA = dataA.individuals[idA];
       const indB = dataB.individuals[idB];
       const fieldDiffs = compareIndividuals(indA, indB);
-      rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(), ...relationshipInfo('Ancestor', code, 0, '') });
+      rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(), aId: idA, bId: idB, ...relationshipInfo('Ancestor', code, 0, '') });
       markShown(idA, idB);
     } else if (idA) {
       totalMissingB++;
@@ -1154,6 +1283,7 @@ function runCompare() {
       rows.push({
         role: 'Sibling', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
         name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
+        aId: pair.aId, bId: pair.bId,
         ...relationshipInfo('Sibling', code, null, combinedSex(indA, indB))
       });
       markShown(pair.aId, pair.bId);
@@ -1191,6 +1321,7 @@ function runCompare() {
       rows.push({
         role: 'Spouse', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
         name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
+        aId: pair.aId, bId: pair.bId,
         ...relationshipInfo('Spouse', code, null, combinedSex(indA, indB))
       });
       markShown(pair.aId, pair.bId);
@@ -1229,6 +1360,7 @@ function runCompare() {
         rows.push({
           role: "Sibling's spouse", status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full,
           fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
+          aId: pair.aId, bId: pair.bId,
           ...relationshipInfo("Sibling's spouse", code, null, combinedSex(indA, indB))
         });
         markShown(pair.aId, pair.bId);
@@ -1268,6 +1400,7 @@ function runCompare() {
         rows.push({
           role: label, status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full,
           fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
+          aId: pair.aId, bId: pair.bId,
           ...relationshipInfo(label, code, genIndex, combinedSex(indA, indB))
         });
         markShown(pair.aId, pair.bId);
@@ -1290,15 +1423,29 @@ function runCompare() {
     sections.push({ code, label: lineageLabel(code), gen: code.length, rows, ancestorHeader });
   }
 
+  // For anyone who doesn't already have their own WikiTree link, find the
+  // closest relative's WikiTree link to offer as a "Nearest WikiTree" fallback.
+  for (const section of sections) {
+    for (const row of section.rows) {
+      if (!hasWikiTreeLink(row.links)) {
+        row.nearestWikiTreeUrl = findNearestWikiTreeUrl(dataA, dataB, row.aId, row.bId);
+      }
+    }
+  }
+
   lastSections = sections;
   document.getElementById('reportControls').style.display = 'flex';
   renderReport();
 }
 
 function missingRow(role, status, indi) {
+  // status 'missB' means present in File A (missing from B), so indi is an A-side
+  // individual; 'missA' means present in File B, so indi is a B-side individual.
+  const isFromA = status === 'missB';
   return {
     role, status, name: indi.name.full, fieldDiffs: null,
-    birthDate: indi.birth.date, deathDate: indi.death.date, links: indi.links || [], id: nextRowId()
+    birthDate: indi.birth.date, deathDate: indi.death.date, links: indi.links || [], id: nextRowId(),
+    aId: isFromA ? indi.id : null, bId: isFromA ? null : indi.id
   };
 }
 
@@ -1470,7 +1617,7 @@ function renderReport() {
         <div class="section-head-left">
           <div class="match-header-name-row">
             <div class="match-header-name">${esc(ah.name || '(unnamed)')}${ahYearsSuffix}</div>
-            ${renderLinks(ah.links)}
+            ${renderLinks(ah.links, ah.nearestWikiTreeUrl)}
           </div>
           <div class="match-header-rel"><strong>${esc(ah.relationshipTerm || '')}</strong>${ah.pathDescription ? ` <span class="rel-bracket">(${esc(ah.pathDescription)})</span>` : ''}</div>
         </div>
@@ -1495,7 +1642,7 @@ function renderReport() {
       if (row.role !== 'Ancestor') {
         html += `<div class="match-header-name-row">
           <div class="match-header-name">${esc(row.name || '(unnamed)')}${yearsSuffix}</div>
-          ${renderLinks(row.links)}
+          ${renderLinks(row.links, row.nearestWikiTreeUrl)}
         </div>
         <div class="match-header-rel"><strong>${esc(row.relationshipTerm || '')}</strong>${row.pathDescription ? ` <span class="rel-bracket">(${esc(row.pathDescription)})</span>` : ''}</div>`;
       }
