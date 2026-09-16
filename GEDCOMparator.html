@@ -16,6 +16,8 @@
     --warn-soft: #fdf3d9;
     --miss: #c1543f;
     --miss-soft: #fbe6e2;
+    --missB: #7c4a9e;
+    --missB-soft: #f0e4f7;
     --ok-soft: #e4efe9;
   }
   * { box-sizing: border-box; }
@@ -91,6 +93,13 @@
     flex: 1;
     min-width: 140px;
   }
+  /* Same amber used to highlight differences in the list (.diff-cell). */
+  .summary .card.diffs { background: var(--warn-soft); border-color: var(--warn); }
+  .summary .card.diffs .num { color: #8a6d1f; }
+  .summary .card.missA { background: var(--miss-soft); border-color: var(--miss); }
+  .summary .card.missA .num { color: var(--miss); }
+  .summary .card.missB { background: var(--missB-soft); border-color: var(--missB); }
+  .summary .card.missB .num { color: var(--missB); }
   .summary .num { font-size: 22px; font-weight: 600; }
   .summary .lbl { font-size: 12px; color: var(--muted); }
   .section {
@@ -125,7 +134,8 @@
     white-space: nowrap;
   }
   .badge.both { background: var(--ok-soft); color: var(--accent); }
-  .badge.missA, .badge.missB { background: var(--miss-soft); color: var(--miss); }
+  .badge.missA { background: var(--miss-soft); color: var(--miss); }
+  .badge.missB { background: var(--missB-soft); color: var(--missB); }
   .badge.maybe { background: var(--warn-soft); color: #8a6d1f; }
   .role-tag {
     font-size: 10px;
@@ -1326,9 +1336,9 @@ function renderReport() {
 
   html += `<div class="summary">
     <div class="card"><div class="num">${totalCompared}</div><div class="lbl">Individuals matched &amp; compared</div></div>
-    <div class="card"><div class="num">${totalWithDiffs}</div><div class="lbl">Matched with attribute differences</div></div>
-    <div class="card"><div class="num">${totalMissingA}</div><div class="lbl">Missing from File A shown</div></div>
-    <div class="card"><div class="num">${totalMissingB}</div><div class="lbl">Missing from File B shown</div></div>
+    <div class="card diffs"><div class="num">${totalWithDiffs}</div><div class="lbl">Matched with attribute differences</div></div>
+    <div class="card missA"><div class="num">${totalMissingA}</div><div class="lbl">Missing from File A shown</div></div>
+    <div class="card missB"><div class="num">${totalMissingB}</div><div class="lbl">Missing from File B shown</div></div>
   </div>`;
 
   if (hideExactMatches || ignoreLikelyAlive || hiddenReviewed > 0) {
@@ -1341,7 +1351,8 @@ function renderReport() {
 
   html += `<div class="legend">
     <span><span class="dot" style="background:var(--accent-soft)"></span>In both files</span>
-    <span><span class="dot" style="background:var(--miss-soft)"></span>Missing from one file</span>
+    <span><span class="dot" style="background:var(--miss-soft)"></span>Missing from File A</span>
+    <span><span class="dot" style="background:var(--missB-soft)"></span>Missing from File B</span>
     <span><span class="dot" style="background:var(--warn-soft)"></span>Possible match / needs verification</span>
   </div>`;
 
