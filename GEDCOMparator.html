@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GEDCOM Tree Comparator</title>
+<style>
+  :root {
+    --bg: #faf9f7;
+    --card: #ffffff;
+    --ink: #1f1d1b;
+    --muted: #8a8580;
+    --accent: #3d6b5c;
+    --accent-soft: #e4efe9;
+    --line: #e4e0da;
+    --warn: #f4b942;
+    --warn-soft: #fdf3d9;
+    --miss: #c1543f;
+    --miss-soft: #fbe6e2;
+    --ok-soft: #e4efe9;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    padding: 24px;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; line-height: 1.5; }
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin-bottom: 18px;
+  }
+  .panel h2 { font-size: 15px; margin: 0 0 12px; }
+  .file-row { display: flex; gap: 16px; flex-wrap: wrap; }
+  .file-col { flex: 1; min-width: 260px; }
+  .file-col label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 6px; }
+  input[type="file"] { font-size: 13px; }
+  .status-line { font-size: 12px; color: var(--accent); margin-top: 6px; min-height: 16px; }
+  select, input[type="text"], input[type="number"] {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    font-size: 13px;
+    margin-top: 4px;
+  }
+  .opts-row { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 14px; align-items: center; }
+  .opts-row > div { display: flex; align-items: center; gap: 8px; }
+  .opts-row label { font-size: 13px; color: var(--ink); }
+  .opts-row input[type="number"] { width: 70px; margin-top: 0; }
+  button.primary {
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 11px 20px;
+    font-size: 14px;
+    cursor: pointer;
+    margin-top: 16px;
+  }
+  button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.primary:hover:not(:disabled) { opacity: 0.9; }
+  .summary {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+  }
+  .summary .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 16px;
+    flex: 1;
+    min-width: 140px;
+  }
+  .summary .num { font-size: 22px; font-weight: 600; }
+  .summary .lbl { font-size: 12px; color: var(--muted); }
+  .section {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    margin-bottom: 14px;
+    overflow: hidden;
+  }
+  .section-head {
+    background: var(--accent-soft);
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    display: flex;
+    justify-content: space-between;
+  }
+  .section-head .gen { color: var(--muted); font-weight: 400; font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    padding: 3px 9px;
+    border-radius: 20px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .badge.both { background: var(--ok-soft); color: var(--accent); }
+  .badge.missA, .badge.missB { background: var(--miss-soft); color: var(--miss); }
+  .badge.maybe { background: var(--warn-soft); color: #8a6d1f; }
+  .role-tag {
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .diff-cell { background: var(--warn-soft); border-radius: 5px; padding: 2px 6px; }
+  .diff-cell .a { color: var(--miss); }
+  .diff-cell .b { color: var(--accent); }
+  .same-cell { color: var(--ink); }
+  .empty-val { color: var(--muted); font-style: italic; }
+  .legend { font-size: 12px; color: var(--muted); margin-bottom: 14px; display: flex; gap: 18px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .filter-input { margin-bottom: 4px; }
+  #report { display: none; }
+  .report-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 16px;
+  }
+  .report-controls label { font-size: 13px; }
+  .row-exact { }
+  .row-hidden { display: none !important; }
+  .section-hidden { display: none !important; }
+  .section-head .count { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>GEDCOM Tree Comparator</h1>
+  <div class="sub">
+    Upload two GEDCOM files that share a common root person. The tool walks direct ancestors from that root,
+    plus each ancestor's siblings and spouses, and reports who's missing from either file and where their
+    recorded details (birth, death, marriage) disagree.
+  </div>
+
+  <div class="panel">
+    <h2>1. Upload files</h2>
+    <div class="file-row">
+      <div class="file-col">
+        <label>File A</label>
+        <input type="file" id="fileA" accept=".ged,.gedcom,text/plain" />
+        <div class="status-line" id="statusA"></div>
+      </div>
+      <div class="file-col">
+        <label>File B</label>
+        <input type="file" id="fileB" accept=".ged,.gedcom,text/plain" />
+        <div class="status-line" id="statusB"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" id="rootPanel" style="display:none;">
+    <h2>2. Confirm the shared root person</h2>
+    <div class="file-row">
+      <div class="file-col">
+        <label>Root person in File A</label>
+        <input type="text" class="filter-input" placeholder="Filter by name…" oninput="filterSelect('rootA', this.value)" />
+        <select id="rootA"></select>
+      </div>
+      <div class="file-col">
+        <label>Root person in File B</label>
+        <input type="text" class="filter-input" placeholder="Filter by name…" oninput="filterSelect('rootB', this.value)" />
+        <select id="rootB"></select>
+      </div>
+    </div>
+    <div class="opts-row">
+      <div>
+        <label for="maxGen">Generations back:</label>
+        <input type="number" id="maxGen" value="6" min="1" max="12" />
+      </div>
+      <div>
+        <input type="checkbox" id="includeSibSpouses" />
+        <label for="includeSibSpouses">Also include spouses of siblings</label>
+      </div>
+    </div>
+    <button class="primary" id="compareBtn" onclick="runCompare()">Compare trees</button>
+  </div>
+
+  <div id="report"></div>
+</div>
+
+<script>
+let dataA = null, dataB = null;
+let allOptionsA = [], allOptionsB = [];
+
+document.getElementById('fileA').addEventListener('change', e => handleFile(e, 'A'));
+document.getElementById('fileB').addEventListener('change', e => handleFile(e, 'B'));
+
+function handleFile(e, which) {
+  const file = e.target.files[0];
+  if (!file) return;
+  const statusEl = document.getElementById('status' + which);
+  statusEl.textContent = 'Reading…';
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const parsed = parseGedcom(ev.target.result);
+      const count = Object.keys(parsed.individuals).length;
+      if (which === 'A') dataA = parsed; else dataB = parsed;
+      statusEl.textContent = `Loaded ${count} individuals.`;
+      maybeShowRootPanel();
+    } catch (err) {
+      statusEl.textContent = 'Could not parse this file: ' + err.message;
+    }
+  };
+  reader.onerror = () => { statusEl.textContent = 'Failed to read file.'; };
+  reader.readAsText(file);
+}
+
+function maybeShowRootPanel() {
+  if (!dataA || !dataB) return;
+  document.getElementById('rootPanel').style.display = 'block';
+  allOptionsA = buildOptionList(dataA);
+  allOptionsB = buildOptionList(dataB);
+  populateSelect('rootA', allOptionsA);
+  populateSelect('rootB', allOptionsB);
+  tryAutoMatchRoot();
+}
+
+function buildOptionList(data) {
+  return Object.values(data.individuals)
+    .map(ind => ({ id: ind.id, label: formatIndiLabel(ind) }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function formatIndiLabel(ind) {
+  const yr = ind.birth.date ? extractYear(ind.birth.date) : '';
+  return `${ind.name.full || '(no name)'}${yr ? ' — b.' + yr : ''} [${ind.id}]`;
+}
+
+function populateSelect(selectId, options) {
+  const sel = document.getElementById(selectId);
+  sel.innerHTML = options.map(o => `<option value="${o.id}">${escapeHtml(o.label)}</option>`).join('');
+}
+
+function filterSelect(selectId, query) {
+  const options = selectId === 'rootA' ? allOptionsA : allOptionsB;
+  const q = query.toLowerCase();
+  const filtered = options.filter(o => o.label.toLowerCase().includes(q));
+  populateSelect(selectId, filtered.length ? filtered : options);
+}
+
+function tryAutoMatchRoot() {
+  // naive: if any individual's normalized name matches exactly across both files, preselect the first pair
+  const normA = {};
+  allOptionsA.forEach(o => {
+    const ind = dataA.individuals[o.id];
+    normA[normalizeName(ind.name.full)] = o.id;
+  });
+  for (const o of allOptionsB) {
+    const ind = dataB.individuals[o.id];
+    const key = normalizeName(ind.name.full);
+    if (normA[key]) {
+      document.getElementById('rootA').value = normA[key];
+      document.getElementById('rootB').value = o.id;
+      return;
+    }
+  }
+}
+
+// ---------- GEDCOM parsing ----------
+
+function parseGedcom(text) {
+  const rawLines = text.split(/\r\n|\r|\n/);
+  const records = []; // top-level records (level 0)
+  const stack = []; // [{level, node}]
+  let root = { level: -1, children: [] };
+  stack.push({ level: -1, node: root });
+
+  for (const rawLine of rawLines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const m = line.match(/^(\d+)\s+(@[^@]+@\s+)?([A-Za-z0-9_]+)(?:\s(.*))?$/);
+    if (!m) continue;
+    const level = parseInt(m[1], 10);
+    let xref = m[2] ? m[2].trim().replace(/@/g, '') : null;
+    let tag = m[3];
+    let value = m[4] || '';
+    // GEDCOM sometimes puts xref after tag for level 0 records like "0 @I1@ INDI" already handled;
+    // but also handle "0 HEAD" with no xref (fine, xref stays null)
+    const node = { level, tag, xref, value, children: [] };
+
+    while (stack.length && stack[stack.length - 1].level >= level) stack.pop();
+    const parent = stack[stack.length - 1].node;
+    parent.children.push(node);
+    stack.push({ level, node });
+  }
+
+  const individuals = {};
+  const families = {};
+
+  for (const node of root.children) {
+    if (node.tag === 'INDI' && node.xref) {
+      individuals[node.xref] = extractIndividual(node);
+    } else if (node.tag === 'FAM' && node.xref) {
+      families[node.xref] = extractFamily(node);
+    }
+  }
+
+  return { individuals, families };
+}
+
+function concValue(node) {
+  let val = node.value || '';
+  for (const child of node.children) {
+    if (child.tag === 'CONC') val += (child.value || '');
+    else if (child.tag === 'CONT') val += '\n' + (child.value || '');
+  }
+  return val;
+}
+
+function findChild(node, tag) {
+  return node.children.find(c => c.tag === tag);
+}
+function findChildren(node, tag) {
+  return node.children.filter(c => c.tag === tag);
+}
+
+function extractEvent(node, tag) {
+  const evt = findChild(node, tag);
+  if (!evt) return { date: '', place: '' };
+  const dateNode = findChild(evt, 'DATE');
+  const placeNode = findChild(evt, 'PLAC');
+  return {
+    date: dateNode ? concValue(dateNode).trim() : '',
+    place: placeNode ? concValue(placeNode).trim() : ''
+  };
+}
+
+function parseNameValue(raw) {
+  const parts = raw.split('/');
+  const given = (parts[0] || '').trim();
+  const surname = (parts[1] || '').trim();
+  const suffix = (parts[2] || '').trim();
+  const full = [given, surname].filter(Boolean).join(' ') + (suffix ? ' ' + suffix : '');
+  return { given, surname, full: full.trim() || raw.trim() };
+}
+
+function extractIndividual(node) {
+  const nameNode = findChild(node, 'NAME');
+  const name = nameNode ? parseNameValue(concValue(nameNode)) : { given: '', surname: '', full: '' };
+  const sexNode = findChild(node, 'SEX');
+  const famcNodes = findChildren(node, 'FAMC');
+  const famsNodes = findChildren(node, 'FAMS');
+  return {
+    id: node.xref,
+    name,
+    sex: sexNode ? (sexNode.value || '').trim() : '',
+    birth: extractEvent(node, 'BIRT'),
+    death: extractEvent(node, 'DEAT'),
+    famc: famcNodes.map(n => (n.value || '').replace(/@/g, '')),
+    fams: famsNodes.map(n => (n.value || '').replace(/@/g, ''))
+  };
+}
+
+function extractFamily(node) {
+  const husb = findChild(node, 'HUSB');
+  const wife = findChild(node, 'WIFE');
+  const chilNodes = findChildren(node, 'CHIL');
+  return {
+    id: node.xref,
+    husb: husb ? (husb.value || '').replace(/@/g, '') : null,
+    wife: wife ? (wife.value || '').replace(/@/g, '') : null,
+    chil: chilNodes.map(n => (n.value || '').replace(/@/g, '')),
+    marr: extractEvent(node, 'MARR')
+  };
+}
+
+// ---------- Tree navigation ----------
+
+function getParents(data, indiId) {
+  const ind = data.individuals[indiId];
+  if (!ind || !ind.famc.length) return { father: null, mother: null };
+  const fam = data.families[ind.famc[0]];
+  if (!fam) return { father: null, mother: null };
+  return { father: fam.husb, mother: fam.wife };
+}
+
+function getSiblings(data, indiId) {
+  const ind = data.individuals[indiId];
+  if (!ind || !ind.famc.length) return [];
+  const fam = data.families[ind.famc[0]];
+  if (!fam) return [];
+  return fam.chil.filter(id => id !== indiId && data.individuals[id]);
+}
+
+function getSpousesWithMarriage(data, indiId) {
+  const ind = data.individuals[indiId];
+  if (!ind) return [];
+  const result = [];
+  for (const famId of ind.fams) {
+    const fam = data.families[famId];
+    if (!fam) continue;
+    const spouseId = fam.husb === indiId ? fam.wife : (fam.wife === indiId ? fam.husb : null);
+    if (spouseId && data.individuals[spouseId]) {
+      result.push({ spouseId, marr: fam.marr });
+    }
+  }
+  return result;
+}
+
+function buildLineage(data, rootId, maxGen) {
+  const nodes = {}; // code -> indiId
+  function recurse(indiId, code, gen) {
+    if (!data.individuals[indiId]) return;
+    nodes[code] = indiId;
+    if (gen >= maxGen) return;
+    const { father, mother } = getParents(data, indiId);
+    if (father) recurse(father, code + 'F', gen + 1);
+    if (mother) recurse(mother, code + 'M', gen + 1);
+  }
+  recurse(rootId, '', 0);
+  return nodes;
+}
+
+function lineageLabel(code) {
+  if (code === '') return 'Root';
+  const last = code[code.length - 1];
+  const rest = code.slice(0, -1);
+  const term = last === 'F' ? 'father' : 'mother';
+  if (rest === '') return capitalize(term);
+  return lineageLabel(rest) + "'s " + term;
+}
+
+function capitalize(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+
+// ---------- Matching helpers ----------
+
+function normalizeName(name) {
+  return (name || '').toLowerCase().replace(/[^a-z\s]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function extractYear(dateStr) {
+  const m = (dateStr || '').match(/\d{4}/);
+  return m ? m[0] : '';
+}
+
+function matchLists(dataA, listA, dataB, listB) {
+  // listA/listB are arrays of individual IDs (in their respective files)
+  const remainingB = listB.slice();
+  const pairs = [];
+
+  // pass 1: exact normalized name match, prefer matching birth year
+  for (const aId of listA.slice()) {
+    const aInd = dataA.individuals[aId];
+    const aName = normalizeName(aInd.name.full);
+    const aYear = extractYear(aInd.birth.date);
+    let candidates = remainingB.filter(bId => normalizeName(dataB.individuals[bId].name.full) === aName);
+    if (candidates.length > 1 && aYear) {
+      const withYear = candidates.filter(bId => extractYear(dataB.individuals[bId].birth.date) === aYear);
+      if (withYear.length) candidates = withYear;
+    }
+    if (candidates.length) {
+      const bId = candidates[0];
+      pairs.push({ aId, bId, confidence: 'match' });
+      remainingB.splice(remainingB.indexOf(bId), 1);
+      listA.splice(listA.indexOf(aId), 1);
+    }
+  }
+
+  // pass 2: same birth year, no name match (possible spelling variants) -- only if unique
+  for (const aId of listA.slice()) {
+    const aInd = dataA.individuals[aId];
+    const aYear = extractYear(aInd.birth.date);
+    if (!aYear) continue;
+    const candidates = remainingB.filter(bId => extractYear(dataB.individuals[bId].birth.date) === aYear);
+    if (candidates.length === 1) {
+      const bId = candidates[0];
+      pairs.push({ aId, bId, confidence: 'maybe' });
+      remainingB.splice(remainingB.indexOf(bId), 1);
+      listA.splice(listA.indexOf(aId), 1);
+    }
+  }
+
+  const missingInB = listA.slice(); // left in A, unmatched
+  const missingInA = remainingB.slice(); // left in B, unmatched
+
+  return { pairs, missingInB, missingInA };
+}
+
+// ---------- Comparison ----------
+
+function normVal(v) { return (v || '').toString().trim(); }
+
+function fieldsEqual(a, b) {
+  return normVal(a).toLowerCase() === normVal(b).toLowerCase();
+}
+
+function compareIndividuals(indA, indB) {
+  const fields = [
+    ['Name', indA.name.full, indB.name.full],
+    ['Birth date', indA.birth.date, indB.birth.date],
+    ['Birth place', indA.birth.place, indB.birth.place],
+    ['Death date', indA.death.date, indB.death.date],
+    ['Death place', indA.death.place, indB.death.place]
+  ];
+  return fields.map(([label, a, b]) => ({ label, a, b, same: fieldsEqual(a, b) }));
+}
+
+function findMarriageFam(data, indiId, spouseId) {
+  const ind = data.individuals[indiId];
+  for (const famId of ind.fams) {
+    const fam = data.families[famId];
+    if (fam && (fam.husb === spouseId || fam.wife === spouseId)) return fam;
+  }
+  return null;
+}
+
+// ---------- Report rendering ----------
+
+function esc(s) { return escapeHtml(s || ''); }
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function renderValueCell(a, b, same) {
+  if (same) {
+    const val = normVal(a) || normVal(b);
+    return `<span class="same-cell">${val ? esc(val) : '<span class="empty-val">—</span>'}</span>`;
+  }
+  const aVal = normVal(a) ? esc(a) : '<span class="empty-val">(blank)</span>';
+  const bVal = normVal(b) ? esc(b) : '<span class="empty-val">(blank)</span>';
+  return `<span class="diff-cell"><span class="a">A: ${aVal}</span><br><span class="b">B: ${bVal}</span></span>`;
+}
+
+function runCompare() {
+  const rootA = document.getElementById('rootA').value;
+  const rootB = document.getElementById('rootB').value;
+  const maxGen = parseInt(document.getElementById('maxGen').value, 10) || 6;
+  const includeSibSpouses = document.getElementById('includeSibSpouses').checked;
+
+  const lineageA = buildLineage(dataA, rootA, maxGen);
+  const lineageB = buildLineage(dataB, rootB, maxGen);
+
+  const allCodes = Array.from(new Set([...Object.keys(lineageA), ...Object.keys(lineageB)]));
+  allCodes.sort((c1, c2) => c1.length - c2.length || c1.localeCompare(c2));
+
+  let totalCompared = 0, totalMissingA = 0, totalMissingB = 0, totalWithDiffs = 0;
+  const sections = [];
+
+  for (const code of allCodes) {
+    const idA = lineageA[code];
+    const idB = lineageB[code];
+    const rows = [];
+
+    // --- the ancestor at this position ---
+    if (idA && idB) {
+      const indA = dataA.individuals[idA];
+      const indB = dataB.individuals[idB];
+      const fieldDiffs = compareIndividuals(indA, indB);
+      const hasDiff = fieldDiffs.some(f => !f.same);
+      totalCompared++;
+      if (hasDiff) totalWithDiffs++;
+      rows.push({ role: 'Ancestor', status: 'both', hasDiff, name: indA.name.full || indB.name.full, fieldDiffs });
+    } else if (idA) {
+      totalMissingB++;
+      rows.push({ role: 'Ancestor', status: 'missB', name: dataA.individuals[idA].name.full, fieldDiffs: null });
+    } else if (idB) {
+      totalMissingA++;
+      rows.push({ role: 'Ancestor', status: 'missA', name: dataB.individuals[idB].name.full, fieldDiffs: null });
+    } else {
+      continue;
+    }
+
+    // --- siblings ---
+    const sibsA = idA ? getSiblings(dataA, idA) : [];
+    const sibsB = idB ? getSiblings(dataB, idB) : [];
+    const sibMatch = matchLists(dataA, sibsA.slice(), dataB, sibsB.slice());
+
+    for (const pair of sibMatch.pairs) {
+      const indA = dataA.individuals[pair.aId];
+      const indB = dataB.individuals[pair.bId];
+      const fieldDiffs = compareIndividuals(indA, indB);
+      const hasDiff = fieldDiffs.some(f => !f.same);
+      totalCompared++;
+      if (hasDiff) totalWithDiffs++;
+      rows.push({
+        role: 'Sibling', status: pair.confidence === 'maybe' ? 'maybe' : 'both', hasDiff,
+        name: indA.name.full || indB.name.full, fieldDiffs
+      });
+    }
+    for (const aId of sibMatch.missingInB) {
+      totalMissingB++;
+      rows.push({ role: 'Sibling', status: 'missB', name: dataA.individuals[aId].name.full, fieldDiffs: null });
+    }
+    for (const bId of sibMatch.missingInA) {
+      totalMissingA++;
+      rows.push({ role: 'Sibling', status: 'missA', name: dataB.individuals[bId].name.full, fieldDiffs: null });
+    }
+
+    // --- spouses of the ancestor ---
+    const spousesA = idA ? getSpousesWithMarriage(dataA, idA).map(s => s.spouseId) : [];
+    const spousesB = idB ? getSpousesWithMarriage(dataB, idB).map(s => s.spouseId) : [];
+    const spouseMatch = matchLists(dataA, spousesA.slice(), dataB, spousesB.slice());
+
+    for (const pair of spouseMatch.pairs) {
+      const indA = dataA.individuals[pair.aId];
+      const indB = dataB.individuals[pair.bId];
+      const fieldDiffs = compareIndividuals(indA, indB);
+      // add marriage comparison
+      const famA = idA ? findMarriageFam(dataA, idA, pair.aId) : null;
+      const famB = idB ? findMarriageFam(dataB, idB, pair.bId) : null;
+      const marrA = famA ? famA.marr : { date: '', place: '' };
+      const marrB = famB ? famB.marr : { date: '', place: '' };
+      fieldDiffs.push({ label: 'Marriage date', a: marrA.date, b: marrB.date, same: fieldsEqual(marrA.date, marrB.date) });
+      fieldDiffs.push({ label: 'Marriage place', a: marrA.place, b: marrB.place, same: fieldsEqual(marrA.place, marrB.place) });
+      const hasDiff = fieldDiffs.some(f => !f.same);
+      totalCompared++;
+      if (hasDiff) totalWithDiffs++;
+      rows.push({
+        role: 'Spouse', status: pair.confidence === 'maybe' ? 'maybe' : 'both', hasDiff,
+        name: indA.name.full || indB.name.full, fieldDiffs
+      });
+    }
+    for (const aId of spouseMatch.missingInB) {
+      totalMissingB++;
+      rows.push({ role: 'Spouse', status: 'missB', name: dataA.individuals[aId].name.full, fieldDiffs: null });
+    }
+    for (const bId of spouseMatch.missingInA) {
+      totalMissingA++;
+      rows.push({ role: 'Spouse', status: 'missA', name: dataB.individuals[bId].name.full, fieldDiffs: null });
+    }
+
+    // --- optionally spouses of siblings ---
+    if (includeSibSpouses) {
+      for (const pair of sibMatch.pairs) {
+        addSiblingSpouseRows(pair.aId, pair.bId, rows);
+      }
+      for (const aId of sibMatch.missingInB) addSiblingSpouseRows(aId, null, rows);
+      for (const bId of sibMatch.missingInA) addSiblingSpouseRows(null, bId, rows);
+    }
+
+    function addSiblingSpouseRows(sibAId, sibBId, rows) {
+      const spA = sibAId ? getSpousesWithMarriage(dataA, sibAId).map(s => s.spouseId) : [];
+      const spB = sibBId ? getSpousesWithMarriage(dataB, sibBId).map(s => s.spouseId) : [];
+      const m = matchLists(dataA, spA.slice(), dataB, spB.slice());
+      for (const pair of m.pairs) {
+        const indA = dataA.individuals[pair.aId];
+        const indB = dataB.individuals[pair.bId];
+        const fieldDiffs = compareIndividuals(indA, indB);
+        const hasDiff = fieldDiffs.some(f => !f.same);
+        totalCompared++;
+        if (hasDiff) totalWithDiffs++;
+        rows.push({ role: "Sibling's spouse", status: pair.confidence === 'maybe' ? 'maybe' : 'both', hasDiff, name: indA.name.full || indB.name.full, fieldDiffs });
+      }
+      for (const aId of m.missingInB) { totalMissingB++; rows.push({ role: "Sibling's spouse", status: 'missB', name: dataA.individuals[aId].name.full, fieldDiffs: null }); }
+      for (const bId of m.missingInA) { totalMissingA++; rows.push({ role: "Sibling's spouse", status: 'missA', name: dataB.individuals[bId].name.full, fieldDiffs: null }); }
+    }
+
+    sections.push({ code, label: lineageLabel(code), gen: code.length, rows });
+  }
+
+  renderReport(sections, { totalCompared, totalMissingA, totalMissingB, totalWithDiffs });
+}
+
+function statusBadge(status) {
+  if (status === 'both') return '<span class="badge both">In both</span>';
+  if (status === 'missA') return '<span class="badge missA">Missing in File A</span>';
+  if (status === 'missB') return '<span class="badge missB">Missing in File B</span>';
+  if (status === 'maybe') return '<span class="badge maybe">Possible match — verify</span>';
+  return '';
+}
+
+function renderReport(sections, stats) {
+  const el = document.getElementById('report');
+  let html = '';
+
+  html += `<div class="summary">
+    <div class="card"><div class="num">${stats.totalCompared}</div><div class="lbl">Individuals matched &amp; compared</div></div>
+    <div class="card"><div class="num">${stats.totalWithDiffs}</div><div class="lbl">Matched with attribute differences</div></div>
+    <div class="card"><div class="num">${stats.totalMissingA}</div><div class="lbl">Missing from File A</div></div>
+    <div class="card"><div class="num">${stats.totalMissingB}</div><div class="lbl">Missing from File B</div></div>
+  </div>`;
+
+  html += `<div class="legend">
+    <span><span class="dot" style="background:var(--accent-soft)"></span>In both files</span>
+    <span><span class="dot" style="background:var(--miss-soft)"></span>Missing from one file</span>
+    <span><span class="dot" style="background:var(--warn-soft)"></span>Possible match / needs verification</span>
+  </div>`;
+
+  for (const section of sections) {
+    if (!section.rows.length) continue;
+    html += `<div class="section">
+      <div class="section-head"><span>${esc(section.label)}</span><span class="gen">generation ${section.gen}</span></div>
+      <table>
+        <thead><tr><th style="width:12%">Role</th><th style="width:20%">Individual</th><th style="width:13%">Status</th><th>Attributes</th></tr></thead>
+        <tbody>`;
+    for (const row of section.rows) {
+      html += `<tr>
+        <td class="role-tag">${esc(row.role)}</td>
+        <td>${esc(row.name || '(unnamed)')}</td>
+        <td>${statusBadge(row.status)}</td>
+        <td>`;
+      if (row.fieldDiffs) {
+        html += `<table style="border:none;">`;
+        for (const f of row.fieldDiffs) {
+          html += `<tr style="border:none;"><td style="border:none;padding:2px 8px 2px 0;color:var(--muted);white-space:nowrap;">${esc(f.label)}</td><td style="border:none;padding:2px 0;">${renderValueCell(f.a, f.b, f.same)}</td></tr>`;
+        }
+        html += `</table>`;
+      } else {
+        html += `<span class="empty-val">Not present to compare — add to the missing file.</span>`;
+      }
+      html += `</td></tr>`;
+    }
+    html += `</tbody></table></div>`;
+  }
+
+  el.innerHTML = html;
+  el.style.display = 'block';
+  el.scrollIntoView({ behavior: 'smooth' });
+}
+</script>
+</body>
+</html>
