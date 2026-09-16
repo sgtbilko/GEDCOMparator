@@ -57,6 +57,7 @@
   .opts-col, .opts-row > .opts-col { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: 340px; }
   .opts-line { display: flex; align-items: center; gap: 8px; }
   .hint { font-size: 11px; color: var(--muted); line-height: 1.4; }
+  .opts-row label.disabled-label { color: var(--muted); }
   button.primary {
     background: var(--accent);
     color: white;
@@ -162,9 +163,9 @@
   <h1>GEDCOM Tree Comparator</h1>
   <div class="sub">
     Upload two GEDCOM files that share a common root person. The tool walks direct ancestors from that root,
-    plus each ancestor's siblings and spouses (and, optionally, each ancestor's own children for a chosen
-    number of generations), and reports who's missing from either file and where their recorded details
-    (birth, death, marriage) disagree.
+    plus each ancestor's spouse (and, optionally, each ancestor's siblings, siblings' spouses, and each
+    ancestor's own children for a chosen number of generations), and reports who's missing from either file
+    and where their recorded details (birth, death, marriage) disagree.
   </div>
 
   <div class="panel">
@@ -203,8 +204,12 @@
         <input type="number" id="maxGen" value="6" min="1" max="12" />
       </div>
       <div>
-        <input type="checkbox" id="includeSibSpouses" />
-        <label for="includeSibSpouses">Also include spouses of siblings</label>
+        <input type="checkbox" id="includeSiblings" onchange="onIncludeSiblingsChange()" />
+        <label for="includeSiblings">Include siblings of ancestors</label>
+      </div>
+      <div>
+        <input type="checkbox" id="includeSibSpouses" disabled />
+        <label for="includeSibSpouses" id="includeSibSpousesLabel" class="disabled-label">Also include spouses of siblings</label>
       </div>
       <div class="opts-col">
         <div class="opts-line">
@@ -322,6 +327,20 @@ function tryAutoMatchRoot() {
       return;
     }
   }
+}
+
+// ---------- Options UI helpers ----------
+
+// "Also include spouses of siblings" only makes sense when siblings themselves
+// are being included, so it's disabled (and forced off) whenever "Include
+// siblings of ancestors" is unchecked.
+function onIncludeSiblingsChange() {
+  const includeSiblings = document.getElementById('includeSiblings').checked;
+  const sibSpousesCb = document.getElementById('includeSibSpouses');
+  const sibSpousesLabel = document.getElementById('includeSibSpousesLabel');
+  sibSpousesCb.disabled = !includeSiblings;
+  if (!includeSiblings) sibSpousesCb.checked = false;
+  sibSpousesLabel.classList.toggle('disabled-label', !includeSiblings);
 }
 
 // ---------- GEDCOM parsing ----------
@@ -759,7 +778,12 @@ function runCompare() {
   const rootA = document.getElementById('rootA').value;
   const rootB = document.getElementById('rootB').value;
   const maxGen = parseInt(document.getElementById('maxGen').value, 10) || 6;
-  const includeSibSpouses = document.getElementById('includeSibSpouses').checked;
+  const includeSiblings = document.getElementById('includeSiblings').checked;
+  // "Include spouses of siblings" only ever applies when siblings themselves are
+  // included — the checkbox is disabled/forced-off in the UI when siblings are
+  // off, but we also guard it here so runCompare() is correct even if called
+  // programmatically (e.g. from the test harness) with an inconsistent state.
+  const includeSibSpouses = document.getElementById('includeSibSpouses').checked && includeSiblings;
   const descendantGen = parseInt(document.getElementById('descendantGen').value, 10) || 0;
 
   const lineageA = buildLineage(dataA, rootA, maxGen);
@@ -810,9 +834,9 @@ function runCompare() {
       continue;
     }
 
-    // --- siblings ---
-    const sibsA = idA ? getSiblings(dataA, idA) : [];
-    const sibsB = idB ? getSiblings(dataB, idB) : [];
+    // --- siblings (only when "Include siblings of ancestors" is enabled) ---
+    const sibsA = (includeSiblings && idA) ? getSiblings(dataA, idA) : [];
+    const sibsB = (includeSiblings && idB) ? getSiblings(dataB, idB) : [];
     const sibMatch = matchLists(dataA, sibsA.slice(), dataB, sibsB.slice());
 
     for (const pair of sibMatch.pairs) {
@@ -875,7 +899,7 @@ function runCompare() {
       markShown(null, bId);
     }
 
-    // --- optionally spouses of siblings ---
+    // --- optionally spouses of siblings (only reachable when siblings themselves are included) ---
     if (includeSibSpouses) {
       for (const pair of sibMatch.pairs) {
         addSiblingSpouseRows(pair.aId, pair.bId, rows);
