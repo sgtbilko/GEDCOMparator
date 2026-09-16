@@ -275,6 +275,7 @@
   </div>
 
   <div class="report-controls" id="reportControls" style="display:none;">
+    <h2 style="flex-basis:100%;margin:0 0 4px;font-size:15px;">3. Select entries to hide/show</h2>
     <div>
       <input type="checkbox" id="onlyShowMissing" onchange="onOnlyShowMissingChange()" />
       <label for="onlyShowMissing">Hide all matches / show only missing people</label>
@@ -291,6 +292,10 @@
         <input type="range" id="aliveYears" min="60" max="100" step="10" value="80" oninput="onFilterChange()" />
         <span id="aliveYearsVal">80</span> yrs)
       </span>
+    </div>
+    <div>
+      <input type="checkbox" id="hideNoBirthDate" onchange="onFilterChange()" />
+      <label for="hideNoBirthDate">Hide people with no date of birth</label>
     </div>
     <div>
       <input type="checkbox" id="ignoreSimilarLocations" checked onchange="onFilterChange()" />
@@ -1383,6 +1388,7 @@ function renderReport() {
   const hideExactMatches = document.getElementById('hideExactMatches').checked;
   const hideReviewedItems = document.getElementById('hideReviewedItems').checked;
   const ignoreLikelyAlive = document.getElementById('ignoreLikelyAlive').checked;
+  const hideNoBirthDate = document.getElementById('hideNoBirthDate').checked;
   const ignoreSimilarLocations = document.getElementById('ignoreSimilarLocations').checked;
   const aliveYears = parseInt(document.getElementById('aliveYears').value, 10);
   const locationThresholdPct = parseInt(document.getElementById('locationThreshold').value, 10);
@@ -1391,7 +1397,7 @@ function renderReport() {
   document.getElementById('locationThresholdVal').textContent = locationThresholdPct + '%';
 
   let totalCompared = 0, totalWithDiffs = 0, totalMissingA = 0, totalMissingB = 0;
-  let hiddenExact = 0, hiddenAlive = 0, hiddenReviewed = 0;
+  let hiddenExact = 0, hiddenAlive = 0, hiddenReviewed = 0, hiddenNoBirthDate = 0;
   const visibleSections = [];
 
   for (const section of lastSections) {
@@ -1401,6 +1407,9 @@ function renderReport() {
       // on) — it's excluded before any of the other filter logic even runs, since
       // once reviewed a row is simply done and shouldn't count toward the other stats.
       if (reviewedIds.has(row.id) && hideReviewedItems) { hiddenReviewed++; continue; }
+      // A person with no recorded birth date (on either side, for a matched pair)
+      // is excluded entirely when this option is on — applies regardless of status.
+      if (hideNoBirthDate && !normVal(row.birthDate)) { hiddenNoBirthDate++; continue; }
       const likelyAlive = ignoreLikelyAlive && isLikelyAlive(row, aliveYears);
       if (row.status === 'missA' || row.status === 'missB') {
         // "Ignore all people likely still alive" removes missing-person rows for them.
@@ -1433,10 +1442,11 @@ function renderReport() {
     <div class="card missB"><div class="num">${totalMissingB}</div><div class="lbl">Missing from File B shown</div></div>
   </div>`;
 
-  if (hideExactMatches || ignoreLikelyAlive || hiddenReviewed > 0) {
+  if (hideExactMatches || ignoreLikelyAlive || hideNoBirthDate || hiddenReviewed > 0) {
     const bits = [];
     if (hideExactMatches) bits.push(`${hiddenExact} exact match${hiddenExact === 1 ? '' : 'es'} hidden`);
     if (ignoreLikelyAlive) bits.push(`${hiddenAlive} likely-living ${hiddenAlive === 1 ? 'person' : 'people'} hidden`);
+    if (hideNoBirthDate) bits.push(`${hiddenNoBirthDate} with no birth date hidden`);
     if (hiddenReviewed > 0) bits.push(`${hiddenReviewed} reviewed ${hiddenReviewed === 1 ? 'item' : 'items'} hidden`);
     html += `<div class="legend">${bits.join(' · ')}</div>`;
   }
