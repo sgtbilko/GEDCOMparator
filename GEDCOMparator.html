@@ -54,6 +54,9 @@
   .opts-row > div { display: flex; align-items: center; gap: 8px; }
   .opts-row label { font-size: 13px; color: var(--ink); }
   .opts-row input[type="number"] { width: 70px; margin-top: 0; }
+  .opts-col, .opts-row > .opts-col { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: 340px; }
+  .opts-line { display: flex; align-items: center; gap: 8px; }
+  .hint { font-size: 11px; color: var(--muted); line-height: 1.4; }
   button.primary {
     background: var(--accent);
     color: white;
@@ -159,8 +162,9 @@
   <h1>GEDCOM Tree Comparator</h1>
   <div class="sub">
     Upload two GEDCOM files that share a common root person. The tool walks direct ancestors from that root,
-    plus each ancestor's siblings and spouses, and reports who's missing from either file and where their
-    recorded details (birth, death, marriage) disagree.
+    plus each ancestor's siblings and spouses (and, optionally, each ancestor's own children for a chosen
+    number of generations), and reports who's missing from either file and where their recorded details
+    (birth, death, marriage) disagree.
   </div>
 
   <div class="panel">
@@ -201,6 +205,13 @@
       <div>
         <input type="checkbox" id="includeSibSpouses" />
         <label for="includeSibSpouses">Also include spouses of siblings</label>
+      </div>
+      <div class="opts-col">
+        <div class="opts-line">
+          <label for="descendantGen">Descendant generations (children of ancestors):</label>
+          <input type="number" id="descendantGen" value="0" min="0" max="6" />
+        </div>
+        <div class="hint">0 = off. Applies to direct-line ancestors only (root, parents, grandparents, …) — catches their children from any marriage, including half-siblings not shared with the direct line.</div>
       </div>
     </div>
     <button class="primary" id="compareBtn" onclick="runCompare()">Compare trees</button>
@@ -454,6 +465,26 @@ function getSpousesWithMarriage(data, indiId) {
   return result;
 }
 
+function getChildren(data, indiId) {
+  const ind = data.individuals[indiId];
+  if (!ind) return [];
+  const seen = new Set();
+  for (const famId of ind.fams) {
+    const fam = data.families[famId];
+    if (!fam) continue;
+    for (const c of fam.chil) {
+      if (data.individuals[c]) seen.add(c);
+    }
+  }
+  return Array.from(seen);
+}
+
+function descendantLabel(genIndex) {
+  if (genIndex === 1) return 'Child';
+  if (genIndex === 2) return 'Grandchild';
+  return 'Great-' + 'great-'.repeat(genIndex - 3) + 'grandchild';
+}
+
 function buildLineage(data, rootId, maxGen) {
   const nodes = {}; // code -> indiId
   function recurse(indiId, code, gen) {
@@ -567,16 +598,96 @@ function placeSimilarity(a, b) {
 }
 // Default only — the active threshold is read live from the slider in renderReport.
 
+// ---------- Genealogy date comparison ----------
+// Hierarchy of exactness: EXACT (full day/month/year) > ABOUT (ABT-qualified, or
+// missing the day) > YEAR (bare year only) > BEFAFT (Bef/Aft-qualified — open-ended).
+const MONTH_NAMES = {
+  jan: 1, january: 1, feb: 2, february: 2, mar: 3, march: 3, apr: 4, april: 4,
+  may: 5, jun: 6, june: 6, jul: 7, july: 7, aug: 8, august: 8,
+  sep: 9, sept: 9, september: 9, oct: 10, october: 10, nov: 11, november: 11,
+  dec: 12, december: 12
+};
+function monthNameToNum(s) {
+  return MONTH_NAMES[s.toLowerCase().replace(/\.$/, '')] || null;
+}
+
+function parseGenealogyDate(raw) {
+  let s = normVal(raw);
+  if (!s) return null;
+  let qualifier = null;
+  let m = s.match(/^(abt|about|circa|cal|est)\.?\s+(.*)$/i);
+  if (m) { qualifier = 'ABT'; s = m[2].trim(); }
+  else if ((m = s.match(/^(bef|before)\.?\s+(.*)$/i))) { qualifier = 'BEF'; s = m[2].trim(); }
+  else if ((m = s.match(/^(aft|after)\.?\s+(.*)$/i))) { qualifier = 'AFT'; s = m[2].trim(); }
+  if (!s) return null;
+
+  let day = null, month = null, year = null, mm;
+  if ((mm = s.match(/^(\d{1,2})\s+([A-Za-z]+)\.?\s+(\d{3,4})$/))) {
+    day = parseInt(mm[1], 10);
+    month = monthNameToNum(mm[2]);
+    year = parseInt(mm[3], 10);
+    if (!month) return null;
+  } else if ((mm = s.match(/^([A-Za-z]+)\.?\s+(\d{3,4})$/))) {
+    month = monthNameToNum(mm[1]);
+    year = parseInt(mm[2], 10);
+    if (!month) return null;
+  } else if ((mm = s.match(/^(\d{3,4})$/))) {
+    year = parseInt(mm[1], 10);
+  } else {
+    return null; // unrecognized format (ranges, quarters, etc.) — caller falls back to a plain string compare
+  }
+
+  let tier;
+  if (qualifier === 'BEF' || qualifier === 'AFT') tier = 'BEFAFT';
+  else if (qualifier === 'ABT') tier = 'ABOUT';
+  else if (day && month) tier = 'EXACT';
+  else if (month && !day) tier = 'ABOUT'; // month+year with no day counts as approximate
+  else tier = 'YEAR';
+
+  return { tier, qualifier, year, month, day };
+}
+
+function dateMidpointDays(p) {
+  const mo = p.month ? p.month - 1 : 5; // no month known -> assume mid-year (June)
+  const da = p.day ? p.day : 15;
+  return Date.UTC(p.year, mo, da) / 86400000;
+}
+
+// Two dates match when:
+//  - both are Bef/Aft-qualified with the same qualifier (Bef with Bef, Aft with Aft) AND the
+//    same underlying date — since a vague Bef/Aft value should be tightened to the most
+//    restrictive known date rather than treated as interchangeable with a different one, or
+//  - exactly one is Bef/Aft-qualified -> never a match (precision isn't comparable), or
+//  - otherwise, a flat 3-month (91 day) tolerance applies whenever either side isn't a full
+//    exact date; two exact dates must match to the day.
+function datesMatch(rawA, rawB) {
+  const a = normVal(rawA), b = normVal(rawB);
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  if (a.toLowerCase() === b.toLowerCase()) return true;
+  const pa = parseGenealogyDate(a), pb = parseGenealogyDate(b);
+  if (!pa || !pb) return fieldsEqual(a, b);
+  const aIsBefAft = pa.tier === 'BEFAFT', bIsBefAft = pb.tier === 'BEFAFT';
+  if (aIsBefAft && bIsBefAft) {
+    return pa.qualifier === pb.qualifier &&
+      pa.year === pb.year && pa.month === pb.month && pa.day === pb.day;
+  }
+  if (aIsBefAft !== bIsBefAft) return false;
+  const bothExact = pa.tier === 'EXACT' && pb.tier === 'EXACT';
+  const tolerance = bothExact ? 0 : 91;
+  return Math.abs(dateMidpointDays(pa) - dateMidpointDays(pb)) <= tolerance;
+}
+
 function compareIndividuals(indA, indB) {
   const fields = [
     ['Name', indA.name.full, indB.name.full, 'text'],
-    ['Birth date', indA.birth.date, indB.birth.date, 'text'],
+    ['Birth date', indA.birth.date, indB.birth.date, 'date'],
     ['Birth place', indA.birth.place, indB.birth.place, 'place'],
-    ['Death date', indA.death.date, indB.death.date, 'text'],
+    ['Death date', indA.death.date, indB.death.date, 'date'],
     ['Death place', indA.death.place, indB.death.place, 'place']
   ];
   return fields.map(([label, a, b, type]) => {
-    const same = fieldsEqual(a, b);
+    const same = type === 'date' ? datesMatch(a, b) : fieldsEqual(a, b);
     const similarity = type === 'place' ? placeSimilarity(a, b) : (same ? 1 : 0);
     return { label, a, b, same, type, similarity };
   });
@@ -601,7 +712,11 @@ function escapeHtml(s) {
 function renderValueCell(f, ignoreSimilarLocations, locationThreshold) {
   const { a, b, same, type, similarity } = f;
   if (same) {
-    const val = normVal(a) || normVal(b);
+    const rawA = normVal(a), rawB = normVal(b);
+    if (type === 'date' && rawA && rawB && rawA.toLowerCase() !== rawB.toLowerCase()) {
+      return `<span class="similar-cell">A: ${esc(a)} · B: ${esc(b)} <span class="similar-note">(dates recognized as equivalent)</span></span>`;
+    }
+    const val = rawA || rawB;
     return `<span class="same-cell">${val ? esc(val) : '<span class="empty-val">—</span>'}</span>`;
   }
   if (ignoreSimilarLocations && type === 'place' && similarity >= locationThreshold) {
@@ -618,16 +733,24 @@ function runCompare() {
   const rootB = document.getElementById('rootB').value;
   const maxGen = parseInt(document.getElementById('maxGen').value, 10) || 6;
   const includeSibSpouses = document.getElementById('includeSibSpouses').checked;
+  const descendantGen = parseInt(document.getElementById('descendantGen').value, 10) || 0;
 
   const lineageA = buildLineage(dataA, rootA, maxGen);
   const lineageB = buildLineage(dataB, rootB, maxGen);
 
-  // Anyone who already gets their own ancestor section shouldn't also be listed
-  // as someone else's sibling/spouse — track who those people are per file.
+  // Anyone who already has their own ancestor section, or who has already been
+  // listed anywhere else in the report, is never listed again elsewhere.
   const ancestorIdsA = new Set(Object.values(lineageA).filter(Boolean));
   const ancestorIdsB = new Set(Object.values(lineageB).filter(Boolean));
-  function isDuplicateOfAncestor(aId, bId) {
-    return (!!aId && ancestorIdsA.has(aId)) || (!!bId && ancestorIdsB.has(bId));
+  const shownIdsA = new Set();
+  const shownIdsB = new Set();
+  function isAlreadyCovered(aId, bId) {
+    return (!!aId && (ancestorIdsA.has(aId) || shownIdsA.has(aId))) ||
+           (!!bId && (ancestorIdsB.has(bId) || shownIdsB.has(bId)));
+  }
+  function markShown(aId, bId) {
+    if (aId) shownIdsA.add(aId);
+    if (bId) shownIdsB.add(bId);
   }
 
   const allCodes = Array.from(new Set([...Object.keys(lineageA), ...Object.keys(lineageB)]));
@@ -647,12 +770,15 @@ function runCompare() {
       const indB = dataB.individuals[idB];
       const fieldDiffs = compareIndividuals(indA, indB);
       rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs });
+      markShown(idA, idB);
     } else if (idA) {
       totalMissingB++;
       rows.push(missingRow('Ancestor', 'missB', dataA.individuals[idA]));
+      markShown(idA, null);
     } else if (idB) {
       totalMissingA++;
       rows.push(missingRow('Ancestor', 'missA', dataB.individuals[idB]));
+      markShown(null, idB);
     } else {
       continue;
     }
@@ -663,7 +789,7 @@ function runCompare() {
     const sibMatch = matchLists(dataA, sibsA.slice(), dataB, sibsB.slice());
 
     for (const pair of sibMatch.pairs) {
-      if (isDuplicateOfAncestor(pair.aId, pair.bId)) continue;
+      if (isAlreadyCovered(pair.aId, pair.bId)) continue;
       const indA = dataA.individuals[pair.aId];
       const indB = dataB.individuals[pair.bId];
       const fieldDiffs = compareIndividuals(indA, indB);
@@ -671,16 +797,19 @@ function runCompare() {
         role: 'Sibling', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
         name: indA.name.full || indB.name.full, fieldDiffs
       });
+      markShown(pair.aId, pair.bId);
     }
     for (const aId of sibMatch.missingInB) {
-      if (isDuplicateOfAncestor(aId, null)) continue;
+      if (isAlreadyCovered(aId, null)) continue;
       totalMissingB++;
       rows.push(missingRow('Sibling', 'missB', dataA.individuals[aId]));
+      markShown(aId, null);
     }
     for (const bId of sibMatch.missingInA) {
-      if (isDuplicateOfAncestor(null, bId)) continue;
+      if (isAlreadyCovered(null, bId)) continue;
       totalMissingA++;
       rows.push(missingRow('Sibling', 'missA', dataB.individuals[bId]));
+      markShown(null, bId);
     }
 
     // --- spouses of the ancestor ---
@@ -689,7 +818,7 @@ function runCompare() {
     const spouseMatch = matchLists(dataA, spousesA.slice(), dataB, spousesB.slice());
 
     for (const pair of spouseMatch.pairs) {
-      if (isDuplicateOfAncestor(pair.aId, pair.bId)) continue;
+      if (isAlreadyCovered(pair.aId, pair.bId)) continue;
       const indA = dataA.individuals[pair.aId];
       const indB = dataB.individuals[pair.bId];
       const fieldDiffs = compareIndividuals(indA, indB);
@@ -698,22 +827,25 @@ function runCompare() {
       const famB = idB ? findMarriageFam(dataB, idB, pair.bId) : null;
       const marrA = famA ? famA.marr : { date: '', place: '' };
       const marrB = famB ? famB.marr : { date: '', place: '' };
-      fieldDiffs.push({ label: 'Marriage date', a: marrA.date, b: marrB.date, same: fieldsEqual(marrA.date, marrB.date), type: 'text', similarity: fieldsEqual(marrA.date, marrB.date) ? 1 : 0 });
+      fieldDiffs.push({ label: 'Marriage date', a: marrA.date, b: marrB.date, same: datesMatch(marrA.date, marrB.date), type: 'date', similarity: datesMatch(marrA.date, marrB.date) ? 1 : 0 });
       fieldDiffs.push({ label: 'Marriage place', a: marrA.place, b: marrB.place, same: fieldsEqual(marrA.place, marrB.place), type: 'place', similarity: placeSimilarity(marrA.place, marrB.place) });
       rows.push({
         role: 'Spouse', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
         name: indA.name.full || indB.name.full, fieldDiffs
       });
+      markShown(pair.aId, pair.bId);
     }
     for (const aId of spouseMatch.missingInB) {
-      if (isDuplicateOfAncestor(aId, null)) continue;
+      if (isAlreadyCovered(aId, null)) continue;
       totalMissingB++;
       rows.push(missingRow('Spouse', 'missB', dataA.individuals[aId]));
+      markShown(aId, null);
     }
     for (const bId of spouseMatch.missingInA) {
-      if (isDuplicateOfAncestor(null, bId)) continue;
+      if (isAlreadyCovered(null, bId)) continue;
       totalMissingA++;
       rows.push(missingRow('Spouse', 'missA', dataB.individuals[bId]));
+      markShown(null, bId);
     }
 
     // --- optionally spouses of siblings ---
@@ -730,19 +862,58 @@ function runCompare() {
       const spB = sibBId ? getSpousesWithMarriage(dataB, sibBId).map(s => s.spouseId) : [];
       const m = matchLists(dataA, spA.slice(), dataB, spB.slice());
       for (const pair of m.pairs) {
-        if (isDuplicateOfAncestor(pair.aId, pair.bId)) continue;
+        if (isAlreadyCovered(pair.aId, pair.bId)) continue;
         const indA = dataA.individuals[pair.aId];
         const indB = dataB.individuals[pair.bId];
         const fieldDiffs = compareIndividuals(indA, indB);
         rows.push({ role: "Sibling's spouse", status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full, fieldDiffs });
+        markShown(pair.aId, pair.bId);
       }
       for (const aId of m.missingInB) {
-        if (isDuplicateOfAncestor(aId, null)) continue;
+        if (isAlreadyCovered(aId, null)) continue;
         totalMissingB++; rows.push(missingRow("Sibling's spouse", 'missB', dataA.individuals[aId]));
+        markShown(aId, null);
       }
       for (const bId of m.missingInA) {
-        if (isDuplicateOfAncestor(null, bId)) continue;
+        if (isAlreadyCovered(null, bId)) continue;
         totalMissingA++; rows.push(missingRow("Sibling's spouse", 'missA', dataB.individuals[bId]));
+        markShown(null, bId);
+      }
+    }
+
+    // --- optionally, descendants (children) of this ancestor, N generations deep ---
+    if (descendantGen > 0) {
+      addDescendantRows(idA, idB, descendantGen, 1, rows);
+    }
+
+    function addDescendantRows(aId, bId, depthRemaining, genIndex, rows) {
+      if (depthRemaining <= 0) return;
+      const childrenA = aId ? getChildren(dataA, aId) : [];
+      const childrenB = bId ? getChildren(dataB, bId) : [];
+      const candA = childrenA.filter(id => !isAlreadyCovered(id, null));
+      const candB = childrenB.filter(id => !isAlreadyCovered(null, id));
+      const m = matchLists(dataA, candA.slice(), dataB, candB.slice());
+      const label = descendantLabel(genIndex);
+
+      for (const pair of m.pairs) {
+        const indA = dataA.individuals[pair.aId];
+        const indB = dataB.individuals[pair.bId];
+        const fieldDiffs = compareIndividuals(indA, indB);
+        rows.push({ role: label, status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full, fieldDiffs });
+        markShown(pair.aId, pair.bId);
+        addDescendantRows(pair.aId, pair.bId, depthRemaining - 1, genIndex + 1, rows);
+      }
+      for (const id of m.missingInB) {
+        totalMissingB++;
+        rows.push(missingRow(label, 'missB', dataA.individuals[id]));
+        markShown(id, null);
+        addDescendantRows(id, null, depthRemaining - 1, genIndex + 1, rows);
+      }
+      for (const id of m.missingInA) {
+        totalMissingA++;
+        rows.push(missingRow(label, 'missA', dataB.individuals[id]));
+        markShown(null, id);
+        addDescendantRows(null, id, depthRemaining - 1, genIndex + 1, rows);
       }
     }
 
