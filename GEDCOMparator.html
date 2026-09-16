@@ -157,16 +157,19 @@
   .report-controls > div { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
   .report-controls label { font-size: 13px; cursor: pointer; }
   .toggle-btn {
-    background: var(--card);
-    color: var(--accent);
     border: 1px solid var(--accent);
     border-radius: 8px;
     padding: 6px 14px;
     font-size: 13px;
     cursor: pointer;
   }
-  .toggle-btn:hover { background: var(--accent-soft); }
-  .toggle-btn.active { background: var(--accent); color: white; }
+  /* Default/"hiding" state: label reads "Show ..." (i.e. offering to reveal what's
+     currently hidden) — shown with a green (accent) background. */
+  .toggle-btn.toggle-btn-show { background: var(--accent); color: white; }
+  .toggle-btn.toggle-btn-show:hover { opacity: 0.9; }
+  /* Toggled/"revealed" state: label reads "Hide ..." — shown with a white background. */
+  .toggle-btn.toggle-btn-hide { background: var(--card); color: var(--accent); }
+  .toggle-btn.toggle-btn-hide:hover { background: var(--accent-soft); }
   .reviewed-cell { text-align: center; }
   .reviewed-cell input[type="checkbox"] { cursor: pointer; }
   tr.reviewed-row td { opacity: 0.6; }
@@ -245,10 +248,10 @@
 
   <div class="report-controls" id="reportControls" style="display:none;">
     <div>
-      <button type="button" id="showReviewedBtn" class="toggle-btn" onclick="toggleShowReviewed()">Show reviewed items</button>
+      <button type="button" id="showReviewedBtn" class="toggle-btn toggle-btn-show" onclick="toggleShowReviewed()">Show reviewed items</button>
     </div>
     <div>
-      <button type="button" id="hideExactMatchesBtn" class="toggle-btn active" onclick="toggleHideExactMatches()">Show exact matches</button>
+      <button type="button" id="hideExactMatchesBtn" class="toggle-btn toggle-btn-show" onclick="toggleHideExactMatches()">Show exact matches</button>
     </div>
     <div>
       <input type="checkbox" id="ignoreLikelyAlive" onchange="onFilterChange()" />
@@ -1070,19 +1073,29 @@ function toggleReviewed(id, checked) {
   renderReport();
 }
 
+// Sets a toggle button's label and colors it based on that label's wording:
+// green ("toggle-btn-show") when it reads "Show ...", white ("toggle-btn-hide")
+// when it reads "Hide ...". The color always follows the text, not the raw
+// boolean state, so this stays correct even if a button's default meaning
+// were ever flipped.
+function setToggleButtonLabel(btn, label) {
+  btn.textContent = label;
+  const isShowLabel = label.trim().toLowerCase().startsWith('show');
+  btn.classList.toggle('toggle-btn-show', isShowLabel);
+  btn.classList.toggle('toggle-btn-hide', !isShowLabel);
+}
+
 function toggleShowReviewed() {
   showReviewed = !showReviewed;
   const btn = document.getElementById('showReviewedBtn');
-  btn.textContent = showReviewed ? 'Hide reviewed items' : 'Show reviewed items';
-  btn.classList.toggle('active', showReviewed);
+  setToggleButtonLabel(btn, showReviewed ? 'Hide reviewed items' : 'Show reviewed items');
   renderReport();
 }
 
 function toggleHideExactMatches() {
   hideExactMatches = !hideExactMatches;
   const btn = document.getElementById('hideExactMatchesBtn');
-  btn.textContent = hideExactMatches ? 'Show exact matches' : 'Hide exact matches';
-  btn.classList.toggle('active', hideExactMatches);
+  setToggleButtonLabel(btn, hideExactMatches ? 'Show exact matches' : 'Hide exact matches');
   renderReport();
 }
 
