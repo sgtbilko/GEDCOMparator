@@ -196,8 +196,8 @@
   <h1>GEDCOM Tree Comparator</h1>
   <div class="sub">
     Upload two GEDCOM files that share a common root person. The tool walks direct ancestors from that root,
-    plus each ancestor's spouse (and, optionally, each ancestor's siblings, siblings' spouses, and each
-    ancestor's own children for a chosen number of generations), and reports who's missing from either file
+    optionally including each ancestor's spouse, each ancestor's siblings (and siblings' spouses), and each
+    ancestor's own children for a chosen number of generations, and reports who's missing from either file
     and where their recorded details (birth, death, marriage) disagree.
   </div>
 
@@ -235,6 +235,10 @@
       <div class="opts-stack-line">
         <label for="maxGen">Generations back:</label>
         <input type="number" id="maxGen" value="6" min="1" max="12" />
+      </div>
+      <div class="opts-stack-line">
+        <input type="checkbox" id="includeAncestorSpouses" checked />
+        <label for="includeAncestorSpouses">Include spouses of ancestors</label>
       </div>
       <div class="opts-stack-line">
         <input type="checkbox" id="includeSiblings" onchange="onIncludeSiblingsChange()" />
@@ -980,6 +984,7 @@ function runCompare() {
   const rootA = document.getElementById('rootA').value;
   const rootB = document.getElementById('rootB').value;
   const maxGen = parseInt(document.getElementById('maxGen').value, 10) || 6;
+  const includeAncestorSpouses = document.getElementById('includeAncestorSpouses').checked;
   const includeSiblings = document.getElementById('includeSiblings').checked;
   // "Include spouses of siblings" only ever applies when siblings themselves are
   // included — the checkbox is disabled/forced-off in the UI when siblings are
@@ -1076,9 +1081,9 @@ function runCompare() {
       markShown(null, bId);
     }
 
-    // --- spouses of the ancestor ---
-    const spousesA = idA ? getSpousesWithMarriage(dataA, idA).map(s => s.spouseId) : [];
-    const spousesB = idB ? getSpousesWithMarriage(dataB, idB).map(s => s.spouseId) : [];
+    // --- spouses of the ancestor (only when "Include spouses of ancestors" is enabled) ---
+    const spousesA = (includeAncestorSpouses && idA) ? getSpousesWithMarriage(dataA, idA).map(s => s.spouseId) : [];
+    const spousesB = (includeAncestorSpouses && idB) ? getSpousesWithMarriage(dataB, idB).map(s => s.spouseId) : [];
     const spouseMatch = matchLists(dataA, spousesA.slice(), dataB, spousesB.slice());
 
     for (const pair of spouseMatch.pairs) {
