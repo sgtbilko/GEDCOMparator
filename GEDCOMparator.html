@@ -245,6 +245,10 @@
 
   <div class="report-controls" id="reportControls" style="display:none;">
     <div>
+      <input type="checkbox" id="onlyShowMissing" onchange="onOnlyShowMissingChange()" />
+      <label for="onlyShowMissing">Hide all matches / show only missing people</label>
+    </div>
+    <div>
       <input type="checkbox" id="hideExactMatches" checked onchange="onFilterChange()" />
       <label for="hideExactMatches">Hide exact matches</label>
     </div>
@@ -1259,6 +1263,12 @@ function toggleReviewed(id, checked) {
   renderReport();
 }
 
+function onOnlyShowMissingChange() {
+  const onlyShowMissing = document.getElementById('onlyShowMissing').checked;
+  document.getElementById('hideExactMatches').disabled = onlyShowMissing;
+  renderReport();
+}
+
 function onFilterChange() {
   renderReport();
 }
@@ -1267,6 +1277,7 @@ function renderReport() {
   if (!lastSections) return;
   const el = document.getElementById('report');
 
+  const onlyShowMissing = document.getElementById('onlyShowMissing').checked;
   const hideExactMatches = document.getElementById('hideExactMatches').checked;
   const hideReviewedItems = document.getElementById('hideReviewedItems').checked;
   const ignoreLikelyAlive = document.getElementById('ignoreLikelyAlive').checked;
@@ -1297,6 +1308,7 @@ function renderReport() {
         continue;
       }
       // status is 'both' or 'maybe'
+      if (onlyShowMissing) continue;
       const hasDiff = rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold);
       totalCompared++;
       if (hasDiff) totalWithDiffs++;
