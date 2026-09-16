@@ -123,6 +123,8 @@
   .diff-cell .a { color: var(--miss); }
   .diff-cell .b { color: var(--accent); }
   .same-cell { color: var(--ink); }
+  .similar-cell { background: var(--ok-soft); border-radius: 5px; padding: 2px 6px; color: var(--ink); }
+  .similar-note { color: var(--accent); font-size: 11px; font-style: italic; }
   .empty-val { color: var(--muted); font-style: italic; }
   .legend { font-size: 12px; color: var(--muted); margin-bottom: 14px; display: flex; gap: 18px; flex-wrap: wrap; }
   .legend span { display: inline-flex; align-items: center; gap: 6px; }
@@ -131,15 +133,21 @@
   #report { display: none; }
   .report-controls {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 10px;
+    gap: 18px;
+    row-gap: 10px;
     margin-bottom: 14px;
     background: var(--card);
     border: 1px solid var(--line);
     border-radius: 10px;
     padding: 12px 16px;
   }
-  .report-controls label { font-size: 13px; }
+  .report-controls > div { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .report-controls label { font-size: 13px; cursor: pointer; }
+  .slider-wrap { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .slider-wrap input[type="range"] { width: 100px; margin-top: 0; accent-color: var(--accent); }
+  .slider-wrap span#aliveYearsVal, .slider-wrap span#locationThresholdVal { color: var(--ink); font-weight: 600; min-width: 28px; }
   .row-exact { }
   .row-hidden { display: none !important; }
   .section-hidden { display: none !important; }
@@ -196,6 +204,31 @@
       </div>
     </div>
     <button class="primary" id="compareBtn" onclick="runCompare()">Compare trees</button>
+  </div>
+
+  <div class="report-controls" id="reportControls" style="display:none;">
+    <div>
+      <input type="checkbox" id="hideExactMatches" onchange="onFilterChange()" />
+      <label for="hideExactMatches">Hide exact matches</label>
+    </div>
+    <div>
+      <input type="checkbox" id="ignoreAliveMissing" onchange="onFilterChange()" />
+      <label for="ignoreAliveMissing">Ignore missing people likely still alive</label>
+      <span class="slider-wrap">
+        (no death date, born within last
+        <input type="range" id="aliveYears" min="60" max="100" step="10" value="80" oninput="onFilterChange()" />
+        <span id="aliveYearsVal">80</span> yrs)
+      </span>
+    </div>
+    <div>
+      <input type="checkbox" id="ignoreSimilarLocations" onchange="onFilterChange()" />
+      <label for="ignoreSimilarLocations">Treat similar locations as matching</label>
+      <span class="slider-wrap">
+        (similarity ≥
+        <input type="range" id="locationThreshold" min="0" max="100" step="10" value="50" oninput="onFilterChange()" />
+        <span id="locationThresholdVal">50%</span>)
+      </span>
+    </div>
   </div>
 
   <div id="report"></div>
@@ -508,15 +541,45 @@ function fieldsEqual(a, b) {
   return normVal(a).toLowerCase() === normVal(b).toLowerCase();
 }
 
+// Sørensen–Dice bigram similarity, used for "treat similar locations as matching".
+// Returns 1 for identical strings, 0 for completely different, in between otherwise.
+function normalizePlace(s) {
+  return (s || '').toLowerCase().replace(/[^a-z0-9\s,]/g, '').replace(/\s+/g, ' ').trim();
+}
+function bigrams(s) {
+  const out = [];
+  for (let i = 0; i < s.length - 1; i++) out.push(s.substr(i, 2));
+  return out;
+}
+function placeSimilarity(a, b) {
+  const na = normalizePlace(a), nb = normalizePlace(b);
+  if (!na && !nb) return 1;
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  const bgA = bigrams(na), bgB = bigrams(nb).slice();
+  if (!bgA.length || !bgB.length) return na === nb ? 1 : 0;
+  let matches = 0;
+  for (const bg of bgA) {
+    const idx = bgB.indexOf(bg);
+    if (idx !== -1) { matches++; bgB.splice(idx, 1); }
+  }
+  return (2 * matches) / (bigrams(na).length + bigrams(nb).length);
+}
+// Default only — the active threshold is read live from the slider in renderReport.
+
 function compareIndividuals(indA, indB) {
   const fields = [
-    ['Name', indA.name.full, indB.name.full],
-    ['Birth date', indA.birth.date, indB.birth.date],
-    ['Birth place', indA.birth.place, indB.birth.place],
-    ['Death date', indA.death.date, indB.death.date],
-    ['Death place', indA.death.place, indB.death.place]
+    ['Name', indA.name.full, indB.name.full, 'text'],
+    ['Birth date', indA.birth.date, indB.birth.date, 'text'],
+    ['Birth place', indA.birth.place, indB.birth.place, 'place'],
+    ['Death date', indA.death.date, indB.death.date, 'text'],
+    ['Death place', indA.death.place, indB.death.place, 'place']
   ];
-  return fields.map(([label, a, b]) => ({ label, a, b, same: fieldsEqual(a, b) }));
+  return fields.map(([label, a, b, type]) => {
+    const same = fieldsEqual(a, b);
+    const similarity = type === 'place' ? placeSimilarity(a, b) : (same ? 1 : 0);
+    return { label, a, b, same, type, similarity };
+  });
 }
 
 function findMarriageFam(data, indiId, spouseId) {
@@ -535,10 +598,15 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
-function renderValueCell(a, b, same) {
+function renderValueCell(f, ignoreSimilarLocations, locationThreshold) {
+  const { a, b, same, type, similarity } = f;
   if (same) {
     const val = normVal(a) || normVal(b);
     return `<span class="same-cell">${val ? esc(val) : '<span class="empty-val">—</span>'}</span>`;
+  }
+  if (ignoreSimilarLocations && type === 'place' && similarity >= locationThreshold) {
+    const val = normVal(a) || normVal(b);
+    return `<span class="similar-cell">${esc(val)} <span class="similar-note">(similar in both — treated as a match)</span></span>`;
   }
   const aVal = normVal(a) ? esc(a) : '<span class="empty-val">(blank)</span>';
   const bVal = normVal(b) ? esc(b) : '<span class="empty-val">(blank)</span>';
@@ -554,10 +622,18 @@ function runCompare() {
   const lineageA = buildLineage(dataA, rootA, maxGen);
   const lineageB = buildLineage(dataB, rootB, maxGen);
 
+  // Anyone who already gets their own ancestor section shouldn't also be listed
+  // as someone else's sibling/spouse — track who those people are per file.
+  const ancestorIdsA = new Set(Object.values(lineageA).filter(Boolean));
+  const ancestorIdsB = new Set(Object.values(lineageB).filter(Boolean));
+  function isDuplicateOfAncestor(aId, bId) {
+    return (!!aId && ancestorIdsA.has(aId)) || (!!bId && ancestorIdsB.has(bId));
+  }
+
   const allCodes = Array.from(new Set([...Object.keys(lineageA), ...Object.keys(lineageB)]));
   allCodes.sort((c1, c2) => c1.length - c2.length || c1.localeCompare(c2));
 
-  let totalCompared = 0, totalMissingA = 0, totalMissingB = 0, totalWithDiffs = 0;
+  let totalMissingA = 0, totalMissingB = 0;
   const sections = [];
 
   for (const code of allCodes) {
@@ -570,16 +646,13 @@ function runCompare() {
       const indA = dataA.individuals[idA];
       const indB = dataB.individuals[idB];
       const fieldDiffs = compareIndividuals(indA, indB);
-      const hasDiff = fieldDiffs.some(f => !f.same);
-      totalCompared++;
-      if (hasDiff) totalWithDiffs++;
-      rows.push({ role: 'Ancestor', status: 'both', hasDiff, name: indA.name.full || indB.name.full, fieldDiffs });
+      rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs });
     } else if (idA) {
       totalMissingB++;
-      rows.push({ role: 'Ancestor', status: 'missB', name: dataA.individuals[idA].name.full, fieldDiffs: null });
+      rows.push(missingRow('Ancestor', 'missB', dataA.individuals[idA]));
     } else if (idB) {
       totalMissingA++;
-      rows.push({ role: 'Ancestor', status: 'missA', name: dataB.individuals[idB].name.full, fieldDiffs: null });
+      rows.push(missingRow('Ancestor', 'missA', dataB.individuals[idB]));
     } else {
       continue;
     }
@@ -590,24 +663,24 @@ function runCompare() {
     const sibMatch = matchLists(dataA, sibsA.slice(), dataB, sibsB.slice());
 
     for (const pair of sibMatch.pairs) {
+      if (isDuplicateOfAncestor(pair.aId, pair.bId)) continue;
       const indA = dataA.individuals[pair.aId];
       const indB = dataB.individuals[pair.bId];
       const fieldDiffs = compareIndividuals(indA, indB);
-      const hasDiff = fieldDiffs.some(f => !f.same);
-      totalCompared++;
-      if (hasDiff) totalWithDiffs++;
       rows.push({
-        role: 'Sibling', status: pair.confidence === 'maybe' ? 'maybe' : 'both', hasDiff,
+        role: 'Sibling', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
         name: indA.name.full || indB.name.full, fieldDiffs
       });
     }
     for (const aId of sibMatch.missingInB) {
+      if (isDuplicateOfAncestor(aId, null)) continue;
       totalMissingB++;
-      rows.push({ role: 'Sibling', status: 'missB', name: dataA.individuals[aId].name.full, fieldDiffs: null });
+      rows.push(missingRow('Sibling', 'missB', dataA.individuals[aId]));
     }
     for (const bId of sibMatch.missingInA) {
+      if (isDuplicateOfAncestor(null, bId)) continue;
       totalMissingA++;
-      rows.push({ role: 'Sibling', status: 'missA', name: dataB.individuals[bId].name.full, fieldDiffs: null });
+      rows.push(missingRow('Sibling', 'missA', dataB.individuals[bId]));
     }
 
     // --- spouses of the ancestor ---
@@ -616,6 +689,7 @@ function runCompare() {
     const spouseMatch = matchLists(dataA, spousesA.slice(), dataB, spousesB.slice());
 
     for (const pair of spouseMatch.pairs) {
+      if (isDuplicateOfAncestor(pair.aId, pair.bId)) continue;
       const indA = dataA.individuals[pair.aId];
       const indB = dataB.individuals[pair.bId];
       const fieldDiffs = compareIndividuals(indA, indB);
@@ -624,23 +698,22 @@ function runCompare() {
       const famB = idB ? findMarriageFam(dataB, idB, pair.bId) : null;
       const marrA = famA ? famA.marr : { date: '', place: '' };
       const marrB = famB ? famB.marr : { date: '', place: '' };
-      fieldDiffs.push({ label: 'Marriage date', a: marrA.date, b: marrB.date, same: fieldsEqual(marrA.date, marrB.date) });
-      fieldDiffs.push({ label: 'Marriage place', a: marrA.place, b: marrB.place, same: fieldsEqual(marrA.place, marrB.place) });
-      const hasDiff = fieldDiffs.some(f => !f.same);
-      totalCompared++;
-      if (hasDiff) totalWithDiffs++;
+      fieldDiffs.push({ label: 'Marriage date', a: marrA.date, b: marrB.date, same: fieldsEqual(marrA.date, marrB.date), type: 'text', similarity: fieldsEqual(marrA.date, marrB.date) ? 1 : 0 });
+      fieldDiffs.push({ label: 'Marriage place', a: marrA.place, b: marrB.place, same: fieldsEqual(marrA.place, marrB.place), type: 'place', similarity: placeSimilarity(marrA.place, marrB.place) });
       rows.push({
-        role: 'Spouse', status: pair.confidence === 'maybe' ? 'maybe' : 'both', hasDiff,
+        role: 'Spouse', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
         name: indA.name.full || indB.name.full, fieldDiffs
       });
     }
     for (const aId of spouseMatch.missingInB) {
+      if (isDuplicateOfAncestor(aId, null)) continue;
       totalMissingB++;
-      rows.push({ role: 'Spouse', status: 'missB', name: dataA.individuals[aId].name.full, fieldDiffs: null });
+      rows.push(missingRow('Spouse', 'missB', dataA.individuals[aId]));
     }
     for (const bId of spouseMatch.missingInA) {
+      if (isDuplicateOfAncestor(null, bId)) continue;
       totalMissingA++;
-      rows.push({ role: 'Spouse', status: 'missA', name: dataB.individuals[bId].name.full, fieldDiffs: null });
+      rows.push(missingRow('Spouse', 'missA', dataB.individuals[bId]));
     }
 
     // --- optionally spouses of siblings ---
@@ -657,22 +730,55 @@ function runCompare() {
       const spB = sibBId ? getSpousesWithMarriage(dataB, sibBId).map(s => s.spouseId) : [];
       const m = matchLists(dataA, spA.slice(), dataB, spB.slice());
       for (const pair of m.pairs) {
+        if (isDuplicateOfAncestor(pair.aId, pair.bId)) continue;
         const indA = dataA.individuals[pair.aId];
         const indB = dataB.individuals[pair.bId];
         const fieldDiffs = compareIndividuals(indA, indB);
-        const hasDiff = fieldDiffs.some(f => !f.same);
-        totalCompared++;
-        if (hasDiff) totalWithDiffs++;
-        rows.push({ role: "Sibling's spouse", status: pair.confidence === 'maybe' ? 'maybe' : 'both', hasDiff, name: indA.name.full || indB.name.full, fieldDiffs });
+        rows.push({ role: "Sibling's spouse", status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full, fieldDiffs });
       }
-      for (const aId of m.missingInB) { totalMissingB++; rows.push({ role: "Sibling's spouse", status: 'missB', name: dataA.individuals[aId].name.full, fieldDiffs: null }); }
-      for (const bId of m.missingInA) { totalMissingA++; rows.push({ role: "Sibling's spouse", status: 'missA', name: dataB.individuals[bId].name.full, fieldDiffs: null }); }
+      for (const aId of m.missingInB) {
+        if (isDuplicateOfAncestor(aId, null)) continue;
+        totalMissingB++; rows.push(missingRow("Sibling's spouse", 'missB', dataA.individuals[aId]));
+      }
+      for (const bId of m.missingInA) {
+        if (isDuplicateOfAncestor(null, bId)) continue;
+        totalMissingA++; rows.push(missingRow("Sibling's spouse", 'missA', dataB.individuals[bId]));
+      }
     }
 
     sections.push({ code, label: lineageLabel(code), gen: code.length, rows });
   }
 
-  renderReport(sections, { totalCompared, totalMissingA, totalMissingB, totalWithDiffs });
+  lastSections = sections;
+  document.getElementById('reportControls').style.display = 'flex';
+  renderReport();
+}
+
+function missingRow(role, status, indi) {
+  return {
+    role, status, name: indi.name.full, fieldDiffs: null,
+    birthDate: indi.birth.date, deathDate: indi.death.date
+  };
+}
+
+// A missing person is treated as "likely still alive" only when we have a birth year,
+// there's no recorded death, and that birth year is within the given number of years.
+function isLikelyAlive(row, maxYears) {
+  if (normVal(row.deathDate)) return false;
+  const yr = extractYear(row.birthDate);
+  if (!yr) return false;
+  const age = new Date().getFullYear() - parseInt(yr, 10);
+  return age >= 0 && age <= maxYears;
+}
+
+// Whether a matched row still counts as "different" once the active filters are applied.
+function rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold) {
+  if (!row.fieldDiffs) return true;
+  return row.fieldDiffs.some(f => {
+    if (f.same) return false;
+    if (ignoreSimilarLocations && f.type === 'place' && f.similarity >= locationThreshold) return false;
+    return true;
+  });
 }
 
 function statusBadge(status) {
@@ -683,16 +789,63 @@ function statusBadge(status) {
   return '';
 }
 
-function renderReport(sections, stats) {
+let lastSections = null;
+
+function onFilterChange() {
+  renderReport();
+}
+
+function renderReport() {
+  if (!lastSections) return;
   const el = document.getElementById('report');
+
+  const hideExactMatches = document.getElementById('hideExactMatches').checked;
+  const ignoreAliveMissing = document.getElementById('ignoreAliveMissing').checked;
+  const ignoreSimilarLocations = document.getElementById('ignoreSimilarLocations').checked;
+  const aliveYears = parseInt(document.getElementById('aliveYears').value, 10);
+  const locationThresholdPct = parseInt(document.getElementById('locationThreshold').value, 10);
+  const locationThreshold = locationThresholdPct / 100;
+  document.getElementById('aliveYearsVal').textContent = aliveYears;
+  document.getElementById('locationThresholdVal').textContent = locationThresholdPct + '%';
+
+  let totalCompared = 0, totalWithDiffs = 0, totalMissingA = 0, totalMissingB = 0;
+  let hiddenExact = 0, hiddenAlive = 0;
+  const visibleSections = [];
+
+  for (const section of lastSections) {
+    const visibleRows = [];
+    for (const row of section.rows) {
+      if (row.status === 'missA' || row.status === 'missB') {
+        if (ignoreAliveMissing && isLikelyAlive(row, aliveYears)) { hiddenAlive++; continue; }
+        if (row.status === 'missA') totalMissingA++; else totalMissingB++;
+        visibleRows.push(row);
+        continue;
+      }
+      // status is 'both' or 'maybe'
+      const hasDiff = rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold);
+      totalCompared++;
+      if (hasDiff) totalWithDiffs++;
+      if (hideExactMatches && !hasDiff) { hiddenExact++; continue; }
+      visibleRows.push(row);
+    }
+    if (visibleRows.length) visibleSections.push({ ...section, rows: visibleRows });
+  }
+
   let html = '';
 
   html += `<div class="summary">
-    <div class="card"><div class="num">${stats.totalCompared}</div><div class="lbl">Individuals matched &amp; compared</div></div>
-    <div class="card"><div class="num">${stats.totalWithDiffs}</div><div class="lbl">Matched with attribute differences</div></div>
-    <div class="card"><div class="num">${stats.totalMissingA}</div><div class="lbl">Missing from File A</div></div>
-    <div class="card"><div class="num">${stats.totalMissingB}</div><div class="lbl">Missing from File B</div></div>
+    <div class="card"><div class="num">${totalCompared}</div><div class="lbl">Individuals matched &amp; compared</div></div>
+    <div class="card"><div class="num">${totalWithDiffs}</div><div class="lbl">Matched with attribute differences</div></div>
+    <div class="card"><div class="num">${totalMissingA}</div><div class="lbl">Missing from File A shown</div></div>
+    <div class="card"><div class="num">${totalMissingB}</div><div class="lbl">Missing from File B shown</div></div>
   </div>`;
+
+  if (hideExactMatches || ignoreAliveMissing) {
+    const bits = [];
+    if (hideExactMatches) bits.push(`${hiddenExact} exact match${hiddenExact === 1 ? '' : 'es'} hidden`);
+    if (ignoreAliveMissing) bits.push(`${hiddenAlive} likely-living missing ${hiddenAlive === 1 ? 'person' : 'people'} hidden`);
+    html += `<div class="legend">${bits.join(' · ')}</div>`;
+  }
 
   html += `<div class="legend">
     <span><span class="dot" style="background:var(--accent-soft)"></span>In both files</span>
@@ -700,8 +853,11 @@ function renderReport(sections, stats) {
     <span><span class="dot" style="background:var(--warn-soft)"></span>Possible match / needs verification</span>
   </div>`;
 
-  for (const section of sections) {
-    if (!section.rows.length) continue;
+  if (!visibleSections.length) {
+    html += `<div class="section"><div style="padding:20px;color:var(--muted);font-size:13px;">Nothing to show with the current filters — try unchecking one above.</div></div>`;
+  }
+
+  for (const section of visibleSections) {
     html += `<div class="section">
       <div class="section-head"><span>${esc(section.label)}</span><span class="gen">generation ${section.gen}</span></div>
       <table>
@@ -716,11 +872,12 @@ function renderReport(sections, stats) {
       if (row.fieldDiffs) {
         html += `<table style="border:none;">`;
         for (const f of row.fieldDiffs) {
-          html += `<tr style="border:none;"><td style="border:none;padding:2px 8px 2px 0;color:var(--muted);white-space:nowrap;">${esc(f.label)}</td><td style="border:none;padding:2px 0;">${renderValueCell(f.a, f.b, f.same)}</td></tr>`;
+          html += `<tr style="border:none;"><td style="border:none;padding:2px 8px 2px 0;color:var(--muted);white-space:nowrap;">${esc(f.label)}</td><td style="border:none;padding:2px 0;">${renderValueCell(f, ignoreSimilarLocations, locationThreshold)}</td></tr>`;
         }
         html += `</table>`;
       } else {
-        html += `<span class="empty-val">Not present to compare — add to the missing file.</span>`;
+        const aliveNote = isLikelyAlive(row, aliveYears) ? ' <span class="empty-val">(possibly still living)</span>' : '';
+        html += `<span class="empty-val">Not present to compare — add to the missing file.</span>${aliveNote}`;
       }
       html += `</td></tr>`;
     }
