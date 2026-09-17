@@ -87,6 +87,16 @@ v24 - Amended the v23 location rule: a birth place that's simply a
       computed text similarity score, since a short, sparse place name
       can otherwise score misleadingly low against a much longer one
       even when fully contained in it.
+
+v25 - Added a collapse/expand chevron to each ancestor's section header:
+      clicking it hides that section's match-cards, leaving just the
+      coloured header bar and a right-pointing arrow (rotating to point
+      down again when re-expanded), plus a count of how many entries are
+      hidden. The toggle updates the DOM directly rather than
+      re-rendering the whole report, so it's instant and doesn't disturb
+      scroll position; collapsed state is still tracked so it survives
+      an unrelated filter change re-rendering the report, and resets on
+      a fresh comparison.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -210,10 +220,39 @@ v24 - Amended the v23 location rule: a birth place that's simply a
     align-items: flex-start;
     gap: 12px;
   }
-  .section-head-left { min-width: 0; }
+  .section-head-left { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
   .section-head .gen { color: var(--muted); font-weight: 400; font-size: 12px; white-space: nowrap; padding-top: 2px; }
   .section-head .match-header-name { margin-bottom: 2px; }
   .section-head .match-header-rel { margin-bottom: 0; }
+  .section-head-main { min-width: 0; flex: 1; }
+  /* Collapse/expand toggle: a chevron button on each ancestor header. It points
+     down while the individuals beneath it are shown, and rotates to point right
+     when collapsed, leaving just the coloured header bar visible. Clicking it
+     toggles a CSS class directly (see toggleSectionCollapse) rather than
+     re-rendering the whole report, so it's instant and doesn't disturb scroll
+     position; the collapsed/expanded state is also tracked in `collapsedSections`
+     so it survives an unrelated filter change re-rendering the report. */
+  .section-toggle {
+    flex: 0 0 auto;
+    width: 20px;
+    height: 20px;
+    margin-top: 1px;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--accent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    border-radius: 4px;
+  }
+  .section-toggle:hover { background: rgba(0, 0, 0, 0.06); }
+  .section-toggle svg { display: block; transform: rotate(90deg); transition: transform 0.15s ease; }
+  .section.section-collapsed .section-toggle svg { transform: rotate(0deg); }
+  .section.section-collapsed > .match-card { display: none; }
+  .section-collapsed-count { display: none; color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 8px; white-space: nowrap; }
+  .section.section-collapsed .section-collapsed-count { display: inline; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
   th { font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: 600; }
@@ -1437,9 +1476,12 @@ function runCompare() {
   const descendantGen = parseInt(document.getElementById('descendantGen').value, 10) || 0;
 
   // A fresh comparison means a fresh set of row ids, so any previously-reviewed
-  // rows (from a prior comparison) no longer apply.
+  // rows (from a prior comparison) no longer apply. Section collapse state is
+  // also reset — lineage codes (F, M, FF, ...) are stable across comparisons,
+  // but a fresh compare is treated as a clean slate the same way reviewedIds is.
   reviewedIds = new Set();
   rowIdCounter = 0;
+  collapsedSections = new Set();
 
   const lineageA = buildLineage(dataA, rootA, maxGen);
   const lineageB = buildLineage(dataB, rootB, maxGen);
@@ -1748,6 +1790,23 @@ function toggleReviewed(id, checked) {
   renderReport();
 }
 
+// Section collapse/expand state: which ancestor-section lineage codes ('',
+// 'F', 'M', 'FF', ...) currently have their cards hidden, leaving just the
+// coloured header bar. Kept as a Set (rather than per-row like reviewedIds)
+// so it survives an unrelated filter change re-rendering the whole report —
+// renderReport() reads from it when building each section's class. The click
+// handler itself skips a full renderReport(): it flips the Set and toggles
+// the CSS class directly on the DOM node, which is instant and doesn't reset
+// scroll position or reshuffle anything else on screen.
+let collapsedSections = new Set();
+
+function toggleSectionCollapse(code, btnEl) {
+  if (collapsedSections.has(code)) collapsedSections.delete(code);
+  else collapsedSections.add(code);
+  const section = btnEl.closest('.section');
+  if (section) section.classList.toggle('section-collapsed', collapsedSections.has(code));
+}
+
 function onOnlyShowMissingChange() {
   const onlyShowMissing = document.getElementById('onlyShowMissing').checked;
   document.getElementById('hideExactMatches').disabled = onlyShowMissing;
@@ -1843,16 +1902,22 @@ function renderReport() {
   for (const section of visibleSections) {
     const ah = section.ancestorHeader;
     const ahYearsSuffix = matchYearsSuffix(ah);
-    html += `<div class="section">
+    const isCollapsed = collapsedSections.has(section.code);
+    html += `<div class="section${isCollapsed ? ' section-collapsed' : ''}">
       <div class="section-head${ah.substantiallyDifferent ? ' substantial-diff' : ''}">
         <div class="section-head-left">
-          <div class="match-header-name-row">
-            <div class="match-header-name">${esc(ah.name || '(unnamed)')}${ahYearsSuffix}</div>
-            ${renderLinks(ah.links, ah.nearestWikiTreeUrl)}
+          <button type="button" class="section-toggle" onclick="toggleSectionCollapse('${section.code}', this)" aria-expanded="${isCollapsed ? 'false' : 'true'}" aria-label="Collapse or expand this ancestor's details" title="Collapse/expand">
+            <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M4 2 L12 8 L4 14" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="section-head-main">
+            <div class="match-header-name-row">
+              <div class="match-header-name">${esc(ah.name || '(unnamed)')}${ahYearsSuffix}</div>
+              ${renderLinks(ah.links, ah.nearestWikiTreeUrl)}
+            </div>
+            <div class="match-header-rel"><strong>${esc(ah.relationshipTerm || '')}</strong>${ah.pathDescription ? ` <span class="rel-bracket">(${esc(ah.pathDescription)})</span>` : ''}</div>
           </div>
-          <div class="match-header-rel"><strong>${esc(ah.relationshipTerm || '')}</strong>${ah.pathDescription ? ` <span class="rel-bracket">(${esc(ah.pathDescription)})</span>` : ''}</div>
         </div>
-        <span class="gen">generation ${section.gen}</span>
+        <span class="gen">generation ${section.gen}<span class="section-collapsed-count">· ${section.rows.length} ${section.rows.length === 1 ? 'entry' : 'entries'} hidden</span></span>
       </div>`;
     for (const row of section.rows) {
       const isReviewed = reviewedIds.has(row.id);

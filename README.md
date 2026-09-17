@@ -18,7 +18,8 @@ Matches are then shown with options to hide/show details as required based on yo
 
 ###### In Progress
 
-* Add ability to expand / collapse details and cards underneath each ancestor header
+* option to collapse/expand all. 
+* colour code ancestor heading based on all cards within it.
 
 
 
@@ -27,6 +28,6 @@ Matches are then shown with options to hide/show details as required based on yo
 * Option to ONLY show matches with significant differences
 * Option to show siblings, spouses and descendants as card under the ancestor heading (current) or each as their own separate entry as per ancestors
 * Check after/before/about logic and tolerance
-* Ensure test 
+* Ensure test
 * Find a way to add a link to ancestry pages (probably not possible)
 
