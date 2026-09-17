@@ -16,9 +16,17 @@ Matches are then shown with options to hide/show details as required based on yo
 
 ## Suggestions for Future Development
 
-* Highlight matches where there are significant differences
-* Option to only show matches with significant differences
-* Ensure all entries shown as single "proper" row, i.e. don't show spouses under another person.
+###### In Progress
+
+* Add ability to expand / collapse details and cards underneath each ancestor header
+
+
+
+###### Not Started
+
+* Option to ONLY show matches with significant differences
+* Option to show siblings, spouses and descendants as card under the ancestor heading (current) or each as their own separate entry as per ancestors
 * Check after/before/about logic and tolerance
+* Ensure test 
 * Find a way to add a link to ancestry pages (probably not possible)
 

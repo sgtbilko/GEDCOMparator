@@ -1,3 +1,93 @@
+<!--
+============================================================================
+ VERSION HISTORY
+
+ This log is maintained going forward: every future change to this file
+ should add a new entry at the bottom describing what changed and why.
+ v1-v4 are reconstructed from the actual diffs between those delivered
+ versions. v5-v22 predate this changelog and aren't individually itemized —
+ the bullet list below that entry summarizes the features known to have
+ been added across that span, without attributing each to a specific
+ version number.
+============================================================================
+
+v1  - Initial release: GEDCOM parsing (INDI/FAM records, NAME/BIRT/DEAT/
+      MARR/FAMC/FAMS), direct-ancestor lineage walk from a chosen root
+      person, sibling and spouse matching by exact normalized name (with
+      birth-year narrowing when a name collides) plus an optional
+      spouses-of-siblings toggle, root-person selection with filterable
+      dropdowns, and a straightforward field-by-field diff report (name,
+      birth/death date & place, marriage date & place) with In both /
+      Missing in A / Missing in B / Possible match badges.
+
+v2  - Added report-level filters: hide exact matches, ignore missing
+      people likely still alive (based on birth year + no death date,
+      with an adjustable age slider), and treat similar locations as
+      matching (Sørensen-Dice bigram similarity with an adjustable
+      threshold slider). Added de-duplication so a person already shown
+      as a direct ancestor isn't also listed again as a sibling/spouse
+      elsewhere in the report.
+
+v3  - Added genealogy-aware date comparison: an exactness hierarchy
+      (Exact > About > Year > Bef/Aft) with month-name normalization and
+      a flat 3-month tolerance for approximate dates, replacing plain
+      string equality. Added a "descendant generations" option to
+      include each direct ancestor's own children/grandchildren/etc. for
+      a chosen depth, with generation labels (Child, Grandchild,
+      Great-grandchild, ...) and dedup extended to cover anyone already
+      shown anywhere else in the report, not just direct ancestors.
+
+v4  - Fixed a same-name matching bug: when two individuals in one file
+      shared a name and birth year alone didn't disambiguate them, the
+      matcher used to silently commit to an arbitrary candidate with
+      full ("match") confidence. It now also tries death year as a
+      second disambiguator, and downgrades to "maybe" confidence
+      instead of guessing when candidates are still tied. Also tightened
+      date matching: an EXACT (full day/month/year) date on either side
+      of a comparison now gets zero tolerance, not just when both sides
+      were exact.
+
+v5-v22 - (predates this changelog — not individually itemized) Known
+      features added across this span include: WWW-tag external profile
+      link parsing with recognition of common genealogy sites (Ancestry,
+      WikiTree, FamilySearch, MyHeritage, Find a Grave, Geni); a
+      "Nearest WikiTree" fallback that looks outward (spouse > child >
+      parent > deeper descendant) for a relative's WikiTree link when a
+      person has none of their own, including a cross-file counterpart
+      lookup guarded against ambiguous name collisions; a standard
+      English relationship-to-root calculator (mother/aunt/2nd cousin
+      once removed/etc., plus step-relations for ancestors' spouses and
+      half-sibling detection); per-row "Reviewed" checkboxes with a
+      hide-reviewed-items filter; independent "include spouses of
+      ancestors" / "include siblings of ancestors" / "include spouses of
+      siblings" toggles (replacing v1's single combined toggle); a "hide
+      people with no date of birth" filter and an "only show missing
+      people" filter; a root-person filter box that mirrors typed text
+      from File A into File B until File B is edited directly; and a
+      restructured report UI (per-person match cards with a header per
+      ancestor section showing name, years, relationship-to-root, and
+      external links) in place of the original plain tables.
+
+v23 - Added a "substantially different" red/green header flag for
+      matched individuals: a person's header/badge turns red instead of
+      the usual green when their name or birth details genuinely
+      conflict, rather than showing routine, expected messiness. A name
+      is flagged only when the surname or primary given name differs by
+      more than a couple of characters of spelling drift (edit distance
+      > 2) — an extra, missing, or reordered middle name never trips
+      this. A birth is flagged when the recorded year differs by more
+      than 10 years, or when both sides have a recorded birth place that
+      shares almost nothing in common. A field left blank on one side is
+      never treated as a conflict by itself.
+
+v24 - Amended the v23 location rule: a birth place that's simply a
+      subset/superset of the other side's (e.g. "Torgau, Germany" vs.
+      "Germany", or a full county/state/country string vs. just the
+      country) is no longer flagged as substantial, regardless of its
+      computed text similarity score, since a short, sparse place name
+      can otherwise score misleadingly low against a much longer one
+      even when fully contained in it.
+-->
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -140,6 +230,13 @@
   .badge.missA { background: var(--miss-soft); color: var(--miss); }
   .badge.missB { background: var(--missB-soft); color: var(--missB); }
   .badge.maybe { background: var(--warn-soft); color: #8a6d1f; }
+  .badge.substantial-diff { background: var(--miss-soft); color: var(--miss); }
+  /* A matched individual's header turns red instead of the usual green when their
+     compared details are substantially different (see isSubstantiallyDifferent) —
+     a name that isn't just a spelling variant/missing middle name, or a birth
+     date/place that doesn't just look like the same event recorded loosely. */
+  .section-head.substantial-diff { background: var(--miss-soft); }
+  .match-card.substantial-diff .match-header-name { color: var(--miss); }
   .role-tag {
     font-size: 10px;
     color: var(--muted);
@@ -1072,6 +1169,110 @@ function placeSimilarity(a, b) {
 }
 // Default only — the active threshold is read live from the slider in renderReport.
 
+// ---------- "Substantially different" header flag ----------
+// A matched pair (status 'both'/'maybe') is still shown with the usual green
+// header, EXCEPT when the two records disagree badly enough that it's worth a
+// visual red flag telling the person to look closer — as opposed to routine,
+// expected messiness (an extra middle name, a typo, one file recording a place
+// down to the town and the other only the country). Two independent checks:
+//  - name: the surname or primary given name genuinely differs (not just a
+//    couple of characters of spelling drift, and not just an extra/missing/
+//    reordered middle name);
+//  - birth: the birth year differs by more than 10 years, or the birth places
+//    are recorded on both sides but are barely related at all.
+// Either being true, on its own, is enough to flag the pair. A field that's
+// simply blank on one side is never treated as a substantial conflict here —
+// that's a missing-data situation the existing (blank) styling already covers.
+
+// Levenshtein edit distance — used to tell "a couple of characters of spelling
+// drift" (e.g. Catherine/Katherine) apart from a genuinely different name.
+function levenshteinDistance(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n;
+  if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const row = [i];
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      row[j] = Math.min(row[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    prev = row;
+  }
+  return prev[n];
+}
+
+// Two non-empty, already-normalized strings count as "just a spelling variant"
+// when they're identical or within a couple of characters (edit distance <= 2)
+// of each other. Blank vs. non-blank is never a spelling variant — that's
+// missing data, handled by the caller.
+function isMinorSpellingVariant(a, b) {
+  if (!a || !b) return false;
+  if (a === b) return true;
+  return levenshteinDistance(a, b) <= 2;
+}
+
+// name: {given, surname, full} as produced by parseNameValue/extractIndividual.
+// Compares surname and primary (first) given-name token independently, since
+// GEDCOM stores any middle names as extra words within the given-name field —
+// an extra, missing, or reordered middle name never trips this on its own.
+function nameSubstantiallyDifferent(nameA, nameB) {
+  const surnameA = normalizeName(nameA.surname);
+  const surnameB = normalizeName(nameB.surname);
+  if (surnameA && surnameB && surnameA !== surnameB && !isMinorSpellingVariant(surnameA, surnameB)) {
+    return true;
+  }
+  const givenTokensA = normalizeName(nameA.given).split(' ').filter(Boolean);
+  const givenTokensB = normalizeName(nameB.given).split(' ').filter(Boolean);
+  const firstA = givenTokensA[0] || '';
+  const firstB = givenTokensB[0] || '';
+  if (firstA && firstB && firstA !== firstB && !isMinorSpellingVariant(firstA, firstB)) {
+    return true;
+  }
+  return false;
+}
+
+// True when one recorded place is a subset/superset of the other — e.g. "Torgau,
+// Germany" vs. "Germany", or "Springfield, Illinois, USA" vs. "USA" — where one
+// side simply recorded less detail rather than a genuinely different place.
+// Compares with commas/spaces stripped so wording order and punctuation don't
+// matter; a short, sparse place name can otherwise score a low bigram
+// similarity against a much longer one even though it's fully contained in it.
+function placeIsSubsetOrSuperset(a, b) {
+  const compactA = normalizePlace(a).replace(/[,\s]+/g, '');
+  const compactB = normalizePlace(b).replace(/[,\s]+/g, '');
+  if (!compactA || !compactB) return false;
+  return compactA.includes(compactB) || compactB.includes(compactA);
+}
+
+// indA/indB: individual records (as extracted by extractIndividual). A birth
+// year gap of more than 10 years is substantial; so is a recorded birth place
+// on both sides that shares almost nothing in common (bigram similarity below
+// 0.3 — comfortably below the 0.5 default "treat similar locations as
+// matching" threshold elsewhere in the app, since this flag is meant to catch
+// places that aren't just a looser/tighter description of the same location) —
+// unless one place is simply a subset/superset of the other (see
+// placeIsSubsetOrSuperset), which is never flagged regardless of similarity
+// score.
+function birthSubstantiallyDifferent(indA, indB) {
+  const yearA = extractYear(indA.birth.date);
+  const yearB = extractYear(indB.birth.date);
+  if (yearA && yearB && Math.abs(parseInt(yearA, 10) - parseInt(yearB, 10)) > 10) {
+    return true;
+  }
+  const placeA = normVal(indA.birth.place);
+  const placeB = normVal(indB.birth.place);
+  if (placeA && placeB && !placeIsSubsetOrSuperset(placeA, placeB) && placeSimilarity(placeA, placeB) < 0.3) {
+    return true;
+  }
+  return false;
+}
+
+function isSubstantiallyDifferent(indA, indB) {
+  if (!indA || !indB) return false;
+  return nameSubstantiallyDifferent(indA.name, indB.name) || birthSubstantiallyDifferent(indA, indB);
+}
+
 // ---------- Genealogy date comparison ----------
 // Hierarchy of exactness: EXACT (full day/month/year) > ABOUT (ABT-qualified, or
 // missing the day) > YEAR (bare year only) > BEFAFT (Bef/Aft-qualified — open-ended).
@@ -1274,7 +1475,7 @@ function runCompare() {
       const indA = dataA.individuals[idA];
       const indB = dataB.individuals[idB];
       const fieldDiffs = compareIndividuals(indA, indB);
-      rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(), aId: idA, bId: idB, ...relationshipInfo('Ancestor', code, 0, '') });
+      rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(), aId: idA, bId: idB, substantiallyDifferent: isSubstantiallyDifferent(indA, indB), ...relationshipInfo('Ancestor', code, 0, '') });
       markShown(idA, idB);
     } else if (idA) {
       totalMissingB++;
@@ -1306,7 +1507,7 @@ function runCompare() {
       rows.push({
         role: 'Sibling', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
         name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-        aId: pair.aId, bId: pair.bId,
+        aId: pair.aId, bId: pair.bId, substantiallyDifferent: isSubstantiallyDifferent(indA, indB),
         ...relationshipInfo('Sibling', code, null, combinedSex(indA, indB))
       });
       markShown(pair.aId, pair.bId);
@@ -1344,7 +1545,7 @@ function runCompare() {
       rows.push({
         role: 'Spouse', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
         name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-        aId: pair.aId, bId: pair.bId,
+        aId: pair.aId, bId: pair.bId, substantiallyDifferent: isSubstantiallyDifferent(indA, indB),
         ...relationshipInfo('Spouse', code, null, combinedSex(indA, indB))
       });
       markShown(pair.aId, pair.bId);
@@ -1383,7 +1584,7 @@ function runCompare() {
         rows.push({
           role: "Sibling's spouse", status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full,
           fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-          aId: pair.aId, bId: pair.bId,
+          aId: pair.aId, bId: pair.bId, substantiallyDifferent: isSubstantiallyDifferent(indA, indB),
           ...relationshipInfo("Sibling's spouse", code, null, combinedSex(indA, indB))
         });
         markShown(pair.aId, pair.bId);
@@ -1423,7 +1624,7 @@ function runCompare() {
         rows.push({
           role: label, status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full,
           fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-          aId: pair.aId, bId: pair.bId,
+          aId: pair.aId, bId: pair.bId, substantiallyDifferent: isSubstantiallyDifferent(indA, indB),
           ...relationshipInfo(label, code, genIndex, combinedSex(indA, indB))
         });
         markShown(pair.aId, pair.bId);
@@ -1514,7 +1715,14 @@ function rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold) {
   });
 }
 
-function statusBadge(status) {
+// A substantially-different match (see isSubstantiallyDifferent) gets a red
+// "Substantial difference" badge in place of the usual green "In both" /
+// amber "verify" badge — the point is to flag it as worth a closer look, not
+// to also claim it's a confident, unremarkable match.
+function statusBadge(status, substantiallyDifferent) {
+  if ((status === 'both' || status === 'maybe') && substantiallyDifferent) {
+    return '<span class="badge substantial-diff">⚠ Substantial difference</span>';
+  }
   if (status === 'both') return '<span class="badge both">In both</span>';
   if (status === 'missA') return '<span class="badge missA">Missing in File A</span>';
   if (status === 'missB') return '<span class="badge missB">Missing in File B</span>';
@@ -1636,7 +1844,7 @@ function renderReport() {
     const ah = section.ancestorHeader;
     const ahYearsSuffix = matchYearsSuffix(ah);
     html += `<div class="section">
-      <div class="section-head">
+      <div class="section-head${ah.substantiallyDifferent ? ' substantial-diff' : ''}">
         <div class="section-head-left">
           <div class="match-header-name-row">
             <div class="match-header-name">${esc(ah.name || '(unnamed)')}${ahYearsSuffix}</div>
@@ -1649,11 +1857,11 @@ function renderReport() {
     for (const row of section.rows) {
       const isReviewed = reviewedIds.has(row.id);
       const yearsSuffix = matchYearsSuffix(row);
-      html += `<div class="match-card${isReviewed ? ' reviewed-row' : ''}">
+      html += `<div class="match-card${isReviewed ? ' reviewed-row' : ''}${row.substantiallyDifferent ? ' substantial-diff' : ''}">
         <div class="match-card-topline">
           <div class="match-card-topline-left">
             <span class="role-tag">${esc(row.role)}</span>
-            ${statusBadge(row.status)}
+            ${statusBadge(row.status, row.substantiallyDifferent)}
           </div>
           <label class="reviewed-inline">
             <input type="checkbox" ${isReviewed ? 'checked' : ''} onchange="toggleReviewed(${row.id}, this.checked)" />
