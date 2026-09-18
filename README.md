@@ -18,13 +18,13 @@ Matches are then shown with options to hide/show details as required based on yo
 
 ###### In Progress
 
-* Option to show siblings, spouses and descendants as card under the ancestor heading (current) or each as their own separate entry as per ancestors
+* Option to ONLY show matches with significant differences
 
 
 
 ###### Not Started
 
-* Option to ONLY show matches with significant differences
+* rework hide/show panel
 * Check after/before/about logic and tolerance
 * Ensure test
 * Find a way to add a link to ancestry pages (probably not possible)

@@ -111,6 +111,24 @@ v26 - Sections now start collapsed by default, via a new "Hide all
       clean match or has been excused — by "treat similar locations as
       matching", by "hide people likely still alive"/"no birth date", or
       by being individually marked Reviewed.
+
+v27 - Added a "Group results by ancestor" checkbox (checked by default,
+      preserving the existing behaviour). Unchecking it switches to a
+      flat layout: every individual — ancestor, sibling, spouse,
+      descendant, all of them — becomes their own top-level section with
+      its own coloured heading (name, relationship-to-root, status),
+      with no bordered match-card nested beneath it; their attributes
+      sit directly under the heading instead. Reuses the existing
+      per-row de-duplication (the same logic that already stops a
+      person appearing under more than one ancestor) so flattening the
+      report never introduces — or needs to separately guard against —
+      a repeated individual. The red/amber/green header colour, the
+      collapse/expand chevron, and "Hide all sub-details" all keep
+      working the same way per individual; switching modes re-applies
+      the master checkbox's collapse/expand state, since a lineage-based
+      section code and a per-row code aren't the same kind of thing.
+      Summary counts (matched/compared/missing) are computed once and
+      are identical in both layouts — grouping is a display choice only.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -264,9 +282,14 @@ v26 - Sections now start collapsed by default, via a new "Hide all
   .section-toggle:hover { background: rgba(0, 0, 0, 0.06); }
   .section-toggle svg { display: block; transform: rotate(90deg); transition: transform 0.15s ease; }
   .section.section-collapsed .section-toggle svg { transform: rotate(0deg); }
-  .section.section-collapsed > .match-card { display: none; }
+  .section.section-collapsed > .match-card, .section.section-collapsed > .section-body { display: none; }
   .section-collapsed-count { display: none; color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 8px; white-space: nowrap; }
   .section.section-collapsed .section-collapsed-count { display: inline; }
+  /* "Show every individual separately" mode: each person is their own
+     section with a coloured header, but with no bordered match-card beneath
+     it — just their attributes laid directly under the header. */
+  .section-body { padding: 14px 16px; }
+  .section-body.reviewed-row { opacity: 0.6; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
   th { font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: 600; }
@@ -439,6 +462,10 @@ v26 - Sections now start collapsed by default, via a new "Hide all
 
   <div class="report-controls" id="reportControls" style="display:none;">
     <h2 style="flex-basis:100%;margin:0 0 4px;font-size:15px;">3. Select entries to hide/show</h2>
+    <div>
+      <input type="checkbox" id="groupByAncestor" checked onchange="onGroupByAncestorChange()" />
+      <label for="groupByAncestor">Group results by ancestor</label>
+    </div>
     <div>
       <input type="checkbox" id="hideAllSubDetails" checked onchange="onHideAllSubDetailsChange()" />
       <label for="hideAllSubDetails">Hide all sub-details (collapse every ancestor section)</label>
@@ -1726,10 +1753,10 @@ function runCompare() {
   }
 
   // "Hide all sub-details" defaults to checked, so a fresh comparison starts
-  // with every ancestor section collapsed — just the coloured headers — until
-  // the person expands one individually or unchecks the box to open them all.
+  // with every section collapsed — just the coloured headers — until the
+  // person expands one individually or unchecks the box to open them all.
   if (document.getElementById('hideAllSubDetails').checked) {
-    for (const s of sections) collapsedSections.add(s.code);
+    for (const code of currentSectionCodes(sections)) collapsedSections.add(code);
   }
 
   lastSections = sections;
@@ -1878,6 +1905,18 @@ function toggleSectionCollapse(code, btnEl) {
   if (section) section.classList.toggle('section-collapsed', collapsedSections.has(code));
 }
 
+// The section "codes" used for collapse tracking mean different things in
+// each display mode: a lineage code (F, M, FF, ...) when grouped by
+// ancestor, or a per-row id when every individual is shown separately (see
+// renderReport). Both master-checkbox handlers and the post-compare seeding
+// need to build the right list for whichever mode is currently selected.
+function currentSectionCodes(groupedSections) {
+  if (document.getElementById('groupByAncestor').checked) {
+    return groupedSections.map(s => s.code);
+  }
+  return groupedSections.flatMap(s => s.rows).map(row => 'row:' + row.id);
+}
+
 // The "Hide all sub-details" master checkbox is a bulk action, not a synced
 // reflection of the current mixed collapse state: ticking it collapses every
 // section regardless of what the person had individually expanded, and
@@ -1886,7 +1925,19 @@ function toggleSectionCollapse(code, btnEl) {
 function onHideAllSubDetailsChange() {
   if (!lastSections) return;
   const hide = document.getElementById('hideAllSubDetails').checked;
-  collapsedSections = hide ? new Set(lastSections.map(s => s.code)) : new Set();
+  collapsedSections = hide ? new Set(currentSectionCodes(lastSections)) : new Set();
+  renderReport();
+}
+
+// Switching between "grouped by ancestor" and "every individual separately"
+// changes what a section even IS, so any per-section collapse state carried
+// over from the previous mode wouldn't map onto anything meaningful. Reset it
+// the same way a fresh comparison does: fully collapsed if the master
+// checkbox is on, fully expanded otherwise.
+function onGroupByAncestorChange() {
+  if (!lastSections) return;
+  const hide = document.getElementById('hideAllSubDetails').checked;
+  collapsedSections = hide ? new Set(currentSectionCodes(lastSections)) : new Set();
   renderReport();
 }
 
@@ -1904,6 +1955,7 @@ function renderReport() {
   if (!lastSections) return;
   const el = document.getElementById('report');
 
+  const groupByAncestor = document.getElementById('groupByAncestor').checked;
   const onlyShowMissing = document.getElementById('onlyShowMissing').checked;
   const hideExactMatches = document.getElementById('hideExactMatches').checked;
   const hideReviewedItems = document.getElementById('hideReviewedItems').checked;
@@ -1918,40 +1970,78 @@ function renderReport() {
 
   let totalCompared = 0, totalWithDiffs = 0, totalMissingA = 0, totalMissingB = 0;
   let hiddenExact = 0, hiddenAlive = 0, hiddenReviewed = 0, hiddenNoBirthDate = 0;
-  const visibleSections = [];
 
-  for (const section of lastSections) {
-    const visibleRows = [];
-    for (const row of section.rows) {
-      // A reviewed row is hidden unconditionally (unless "Show reviewed items" is
-      // on) — it's excluded before any of the other filter logic even runs, since
-      // once reviewed a row is simply done and shouldn't count toward the other stats.
-      if (reviewedIds.has(row.id) && hideReviewedItems) { hiddenReviewed++; continue; }
-      // A person with no recorded birth date (on either side, for a matched pair)
-      // is excluded entirely when this option is on — applies regardless of status.
-      if (hideNoBirthDate && !normVal(row.birthDate)) { hiddenNoBirthDate++; continue; }
-      const likelyAlive = ignoreLikelyAlive && isLikelyAlive(row, aliveYears);
-      if (row.status === 'missA' || row.status === 'missB') {
-        // "Ignore all people likely still alive" removes missing-person rows for them.
-        if (likelyAlive) { hiddenAlive++; continue; }
-        if (row.status === 'missA') totalMissingA++; else totalMissingB++;
-        visibleRows.push(row);
-        continue;
-      }
-      // status is 'both' or 'maybe'
-      if (onlyShowMissing) continue;
-      const hasDiff = rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold);
-      totalCompared++;
-      if (hasDiff) totalWithDiffs++;
-      // It also removes matched rows with mismatched data for a likely-living person.
-      // Exact matches for likely-living people are unaffected by this option — those
-      // are controlled separately by "Hide exact matches".
-      if (likelyAlive && hasDiff) { hiddenAlive++; continue; }
-      if (hideExactMatches && !hasDiff) { hiddenExact++; continue; }
-      visibleRows.push(row);
+  // Evaluate a single row against every filter exactly once. This is shared
+  // between the two display modes below so switching "Group results by
+  // ancestor" on/off can never change the top-line counts or which
+  // individuals get hidden by a filter — grouping only changes how the
+  // (identical) set of visible rows is laid out on screen. Returns the row
+  // if it should be shown, or null if a filter hid it (the relevant hidden-
+  // counter has already been bumped either way).
+  function evaluateRow(row) {
+    // A reviewed row is hidden unconditionally (unless "Show reviewed items" is
+    // on) — it's excluded before any of the other filter logic even runs, since
+    // once reviewed a row is simply done and shouldn't count toward the other stats.
+    if (reviewedIds.has(row.id) && hideReviewedItems) { hiddenReviewed++; return null; }
+    // A person with no recorded birth date (on either side, for a matched pair)
+    // is excluded entirely when this option is on — applies regardless of status.
+    if (hideNoBirthDate && !normVal(row.birthDate)) { hiddenNoBirthDate++; return null; }
+    const likelyAlive = ignoreLikelyAlive && isLikelyAlive(row, aliveYears);
+    if (row.status === 'missA' || row.status === 'missB') {
+      // "Ignore all people likely still alive" removes missing-person rows for them.
+      if (likelyAlive) { hiddenAlive++; return null; }
+      if (row.status === 'missA') totalMissingA++; else totalMissingB++;
+      return row;
     }
-    const sectionStatus = computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold);
-    if (visibleRows.length) visibleSections.push({ ...section, rows: visibleRows, status: sectionStatus });
+    // status is 'both' or 'maybe'
+    if (onlyShowMissing) return null;
+    const hasDiff = rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold);
+    totalCompared++;
+    if (hasDiff) totalWithDiffs++;
+    // It also removes matched rows with mismatched data for a likely-living person.
+    // Exact matches for likely-living people are unaffected by this option — those
+    // are controlled separately by "Hide exact matches".
+    if (likelyAlive && hasDiff) { hiddenAlive++; return null; }
+    if (hideExactMatches && !hasDiff) { hiddenExact++; return null; }
+    return row;
+  }
+
+  // Build the list of things to actually render. Grouped mode keeps the
+  // existing one-section-per-ancestor shape (a header plus a match-card per
+  // row underneath it, including the ancestor's own). Flat mode turns EVERY
+  // row across every ancestor section into its own standalone section —
+  // since the underlying matching/dedup logic already guarantees a given
+  // individual is never listed under more than one ancestor, this flatten
+  // never introduces (or needs to remove) a duplicate.
+  const displaySections = [];
+  if (groupByAncestor) {
+    for (const section of lastSections) {
+      const visibleRows = [];
+      for (const row of section.rows) {
+        const kept = evaluateRow(row);
+        if (kept) visibleRows.push(kept);
+      }
+      if (visibleRows.length) {
+        displaySections.push({
+          code: section.code, gen: section.gen, rows: visibleRows,
+          ancestorHeader: section.ancestorHeader,
+          status: computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold),
+          flat: false
+        });
+      }
+    }
+  } else {
+    for (const section of lastSections) {
+      for (const row of section.rows) {
+        const kept = evaluateRow(row);
+        if (!kept) continue;
+        displaySections.push({
+          code: 'row:' + row.id, gen: null, rows: [row], ancestorHeader: row,
+          status: computeSectionStatus({ rows: [row] }, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold),
+          flat: true
+        });
+      }
+    }
   }
 
   let html = '';
@@ -1979,18 +2069,24 @@ function renderReport() {
     <span><span class="dot" style="background:var(--warn-soft)"></span>Possible match / needs verification</span>
   </div>`;
 
-  if (!visibleSections.length) {
+  if (!displaySections.length) {
     html += `<div class="section"><div style="padding:20px;color:var(--muted);font-size:13px;">Nothing to show with the current filters — try unchecking one above.</div></div>`;
   }
 
-  for (const section of visibleSections) {
+  for (const section of displaySections) {
     const ah = section.ancestorHeader;
     const ahYearsSuffix = matchYearsSuffix(ah);
     const isCollapsed = collapsedSections.has(section.code);
-    html += `<div class="section${isCollapsed ? ' section-collapsed' : ''}">
+    // Grouped headers show which generation this ancestor is; flat headers
+    // show the row's own role instead, since "generation N" alone wouldn't
+    // distinguish a "Sibling" row from a "Spouse" row once nothing is grouped.
+    const headerRight = section.flat
+      ? esc(ah.role)
+      : `generation ${section.gen}<span class="section-collapsed-count">· ${section.rows.length} ${section.rows.length === 1 ? 'entry' : 'entries'} hidden</span>`;
+    html += `<div class="section${isCollapsed ? ' section-collapsed' : ''}${section.flat ? ' section-flat' : ''}">
       <div class="section-head status-${section.status}">
         <div class="section-head-left">
-          <button type="button" class="section-toggle" onclick="toggleSectionCollapse('${section.code}', this)" aria-expanded="${isCollapsed ? 'false' : 'true'}" aria-label="Collapse or expand this ancestor's details" title="Collapse/expand">
+          <button type="button" class="section-toggle" onclick="toggleSectionCollapse('${section.code}', this)" aria-expanded="${isCollapsed ? 'false' : 'true'}" aria-label="Collapse or expand this section's details" title="Collapse/expand">
             <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M4 2 L12 8 L4 14" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
           </button>
           <div class="section-head-main">
@@ -2001,12 +2097,17 @@ function renderReport() {
             <div class="match-header-rel"><strong>${esc(ah.relationshipTerm || '')}</strong>${ah.pathDescription ? ` <span class="rel-bracket">(${esc(ah.pathDescription)})</span>` : ''}</div>
           </div>
         </div>
-        <span class="gen">generation ${section.gen}<span class="section-collapsed-count">· ${section.rows.length} ${section.rows.length === 1 ? 'entry' : 'entries'} hidden</span></span>
+        <span class="gen">${headerRight}</span>
       </div>`;
     for (const row of section.rows) {
       const isReviewed = reviewedIds.has(row.id);
       const yearsSuffix = matchYearsSuffix(row);
-      html += `<div class="match-card${isReviewed ? ' reviewed-row' : ''}${row.substantiallyDifferent ? ' substantial-diff' : ''}">
+      // Flat mode has no bordered match-card beneath the header — just the
+      // attributes, laid directly under it — since the header IS this row.
+      const bodyClasses = [section.flat ? 'section-body' : 'match-card'];
+      if (isReviewed) bodyClasses.push('reviewed-row');
+      if (!section.flat && row.substantiallyDifferent) bodyClasses.push('substantial-diff');
+      html += `<div class="${bodyClasses.join(' ')}">
         <div class="match-card-topline">
           <div class="match-card-topline-left">
             <span class="role-tag">${esc(row.role)}</span>
@@ -2017,9 +2118,10 @@ function renderReport() {
             Reviewed
           </label>
         </div>`;
-      // The Ancestor row's own name/relationship is already shown in the
-      // section-head above, so its card skips repeating it.
-      if (row.role !== 'Ancestor') {
+      // A row's own name/relationship is skipped here whenever it's already
+      // shown in the section-head above it: always true in flat mode (the
+      // header IS this row), and true for the Ancestor row in grouped mode.
+      if (section.flat === false && row.role !== 'Ancestor') {
         html += `<div class="match-header-name-row">
           <div class="match-header-name">${esc(row.name || '(unnamed)')}${yearsSuffix}</div>
           ${renderLinks(row.links, row.nearestWikiTreeUrl)}
