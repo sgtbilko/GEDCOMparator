@@ -129,6 +129,29 @@ v27 - Added a "Group results by ancestor" checkbox (checked by default,
       section code and a per-row code aren't the same kind of thing.
       Summary counts (matched/compared/missing) are computed once and
       are identical in both layouts — grouping is a display choice only.
+
+v28 - Added "Only show items with significant differences (red)": keeps
+      only rows that would make a header red (a non-excused missing
+      person, or a substantially-different matched pair), hiding
+      everything amber or green — an unverified "maybe" match or an
+      ordinary recorded difference doesn't qualify. Works the same way
+      in both "Group results by ancestor" and the flat per-individual
+      layout, and — like "Hide exact matches", which it makes moot and
+      so disables while it's on — only changes what's displayed, not
+      the summary's matched/compared/missing counts.
+
+v29 - Added a three-way "Father's side / Both sides / Mother's side"
+      filter (defaulting to Both sides, i.e. current behaviour). Scopes
+      entire ancestor sections by which parent-link their lineage code
+      starts with (F... vs M...); the root's own section — the root
+      person's siblings, spouse, and children — always stays visible
+      regardless of the filter, since it isn't part of either parent's
+      side. Applies the same way whether results are grouped by
+      ancestor or shown as separate individuals, and — unlike the
+      purely-cosmetic display filters — actually shrinks the summary's
+      matched/compared/missing counts to match the selected scope,
+      since it's a real reduction of what's being compared rather than
+      just a decluttering choice.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -383,6 +406,7 @@ v27 - Added a "Group results by ancestor" checkbox (checked by default,
   }
   .report-controls > div { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
   .report-controls label { font-size: 13px; cursor: pointer; }
+  .side-select { width: auto; margin-top: 0; margin-left: 6px; display: inline-block; padding: 5px 8px; }
   .slider-wrap { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
   .slider-wrap input[type="range"] { width: 100px; margin-top: 0; accent-color: var(--accent); }
   .slider-wrap span#aliveYearsVal, .slider-wrap span#locationThresholdVal { color: var(--ink); font-weight: 600; min-width: 28px; }
@@ -471,8 +495,20 @@ v27 - Added a "Group results by ancestor" checkbox (checked by default,
       <label for="hideAllSubDetails">Hide all sub-details (collapse every ancestor section)</label>
     </div>
     <div>
+      <label for="sideFilter">Show:</label>
+      <select id="sideFilter" class="side-select" onchange="onFilterChange()">
+        <option value="father">Father's side</option>
+        <option value="both" selected>Both sides</option>
+        <option value="mother">Mother's side</option>
+      </select>
+    </div>
+    <div>
       <input type="checkbox" id="onlyShowMissing" onchange="onOnlyShowMissingChange()" />
       <label for="onlyShowMissing">Hide all matches / show only missing people</label>
+    </div>
+    <div>
+      <input type="checkbox" id="onlySignificant" onchange="onOnlySignificantChange()" />
+      <label for="onlySignificant">Only show items with significant differences (red)</label>
     </div>
     <div>
       <input type="checkbox" id="hideExactMatches" checked onchange="onFilterChange()" />
@@ -1941,9 +1977,23 @@ function onGroupByAncestorChange() {
   renderReport();
 }
 
-function onOnlyShowMissingChange() {
+// "Hide exact matches" is moot whenever either of these narrower filters is
+// on — both already exclude everything an exact match would leave behind —
+// so it's disabled (greyed out) rather than left showing a stale checked
+// state that isn't actually doing anything.
+function updateHideExactMatchesDisabled() {
   const onlyShowMissing = document.getElementById('onlyShowMissing').checked;
-  document.getElementById('hideExactMatches').disabled = onlyShowMissing;
+  const onlySignificant = document.getElementById('onlySignificant').checked;
+  document.getElementById('hideExactMatches').disabled = onlyShowMissing || onlySignificant;
+}
+
+function onOnlyShowMissingChange() {
+  updateHideExactMatchesDisabled();
+  renderReport();
+}
+
+function onOnlySignificantChange() {
+  updateHideExactMatchesDisabled();
   renderReport();
 }
 
@@ -1951,12 +2001,32 @@ function onFilterChange() {
   renderReport();
 }
 
+// A lineage code's "side" is simply which parent-link it starts with: 'F...'
+// codes descend from the father, 'M...' codes from the mother. The root's
+// own code ('') is neither — the shared starting point of the whole tree —
+// so it (and everyone under it: root's own siblings, spouse, children, ...)
+// is always shown regardless of the "Father's side / Both sides / Mother's
+// side" filter; only sections descending from an actual parent get filtered.
+function sectionSide(code) {
+  if (!code) return 'root';
+  return code[0] === 'F' ? 'father' : 'mother';
+}
+
+function sideVisible(code, sideFilter) {
+  if (sideFilter === 'both') return true;
+  const side = sectionSide(code);
+  if (side === 'root') return true;
+  return side === sideFilter;
+}
+
 function renderReport() {
   if (!lastSections) return;
   const el = document.getElementById('report');
 
   const groupByAncestor = document.getElementById('groupByAncestor').checked;
+  const sideFilter = document.getElementById('sideFilter').value;
   const onlyShowMissing = document.getElementById('onlyShowMissing').checked;
+  const onlySignificant = document.getElementById('onlySignificant').checked;
   const hideExactMatches = document.getElementById('hideExactMatches').checked;
   const hideReviewedItems = document.getElementById('hideReviewedItems').checked;
   const ignoreLikelyAlive = document.getElementById('ignoreLikelyAlive').checked;
@@ -1969,7 +2039,7 @@ function renderReport() {
   document.getElementById('locationThresholdVal').textContent = locationThresholdPct + '%';
 
   let totalCompared = 0, totalWithDiffs = 0, totalMissingA = 0, totalMissingB = 0;
-  let hiddenExact = 0, hiddenAlive = 0, hiddenReviewed = 0, hiddenNoBirthDate = 0;
+  let hiddenExact = 0, hiddenAlive = 0, hiddenReviewed = 0, hiddenNoBirthDate = 0, hiddenNotSignificant = 0;
 
   // Evaluate a single row against every filter exactly once. This is shared
   // between the two display modes below so switching "Group results by
@@ -1987,22 +2057,30 @@ function renderReport() {
     // is excluded entirely when this option is on — applies regardless of status.
     if (hideNoBirthDate && !normVal(row.birthDate)) { hiddenNoBirthDate++; return null; }
     const likelyAlive = ignoreLikelyAlive && isLikelyAlive(row, aliveYears);
+    // "Significant" here means the same thing a red section header means (see
+    // computeSectionStatus): a non-excused missing person, or a matched pair
+    // flagged as substantially different. An unverified "maybe" match or an
+    // ordinary recorded difference is amber, not red, so it doesn't qualify.
+    let isSignificant;
     if (row.status === 'missA' || row.status === 'missB') {
       // "Ignore all people likely still alive" removes missing-person rows for them.
       if (likelyAlive) { hiddenAlive++; return null; }
       if (row.status === 'missA') totalMissingA++; else totalMissingB++;
-      return row;
+      isSignificant = true;
+    } else {
+      // status is 'both' or 'maybe'
+      if (onlyShowMissing) return null;
+      const hasDiff = rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold);
+      totalCompared++;
+      if (hasDiff) totalWithDiffs++;
+      // It also removes matched rows with mismatched data for a likely-living person.
+      // Exact matches for likely-living people are unaffected by this option — those
+      // are controlled separately by "Hide exact matches".
+      if (likelyAlive && hasDiff) { hiddenAlive++; return null; }
+      if (hideExactMatches && !hasDiff) { hiddenExact++; return null; }
+      isSignificant = !!row.substantiallyDifferent;
     }
-    // status is 'both' or 'maybe'
-    if (onlyShowMissing) return null;
-    const hasDiff = rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold);
-    totalCompared++;
-    if (hasDiff) totalWithDiffs++;
-    // It also removes matched rows with mismatched data for a likely-living person.
-    // Exact matches for likely-living people are unaffected by this option — those
-    // are controlled separately by "Hide exact matches".
-    if (likelyAlive && hasDiff) { hiddenAlive++; return null; }
-    if (hideExactMatches && !hasDiff) { hiddenExact++; return null; }
+    if (onlySignificant && !isSignificant) { hiddenNotSignificant++; return null; }
     return row;
   }
 
@@ -2016,6 +2094,7 @@ function renderReport() {
   const displaySections = [];
   if (groupByAncestor) {
     for (const section of lastSections) {
+      if (!sideVisible(section.code, sideFilter)) continue;
       const visibleRows = [];
       for (const row of section.rows) {
         const kept = evaluateRow(row);
@@ -2032,6 +2111,7 @@ function renderReport() {
     }
   } else {
     for (const section of lastSections) {
+      if (!sideVisible(section.code, sideFilter)) continue;
       for (const row of section.rows) {
         const kept = evaluateRow(row);
         if (!kept) continue;
@@ -2053,12 +2133,13 @@ function renderReport() {
     <div class="card missB"><div class="num">${totalMissingB}</div><div class="lbl">Missing from File B shown</div></div>
   </div>`;
 
-  if (hideExactMatches || ignoreLikelyAlive || hideNoBirthDate || hiddenReviewed > 0) {
+  if (hideExactMatches || ignoreLikelyAlive || hideNoBirthDate || hiddenReviewed > 0 || onlySignificant) {
     const bits = [];
     if (hideExactMatches) bits.push(`${hiddenExact} exact match${hiddenExact === 1 ? '' : 'es'} hidden`);
     if (ignoreLikelyAlive) bits.push(`${hiddenAlive} likely-living ${hiddenAlive === 1 ? 'person' : 'people'} hidden`);
     if (hideNoBirthDate) bits.push(`${hiddenNoBirthDate} with no birth date hidden`);
     if (hiddenReviewed > 0) bits.push(`${hiddenReviewed} reviewed ${hiddenReviewed === 1 ? 'item' : 'items'} hidden`);
+    if (onlySignificant) bits.push(`${hiddenNotSignificant} without a significant difference hidden`);
     html += `<div class="legend">${bits.join(' · ')}</div>`;
   }
 

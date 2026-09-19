@@ -25,6 +25,7 @@ Matches are then shown with options to hide/show details as required based on yo
 ###### Not Started
 
 * rework hide/show panel, e.g. a slider for show all/show similar/show bad misses
+* don't scroll back up when ticking/unticking
 * Check after/before/about logic and tolerance
 * Find a way to add a link to ancestry pages (probably not possible)
 
