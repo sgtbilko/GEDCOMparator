@@ -57,7 +57,7 @@ const { loadApp, check, summary } = require('../harness');
 1 CHIL @P4@
 `;
 
-  const app = loadApp({ rootA: 'I1', rootB: 'P1', maxGen: '2', descendantGen: '0' });
+  const app = loadApp({ rootA: 'I1', rootB: 'P1', maxGen: '2', descendantGen: '0', includeSiblings: true });
   app.loadGedcomFiles(gedA, gedB);
   app.runCompare();
   const fatherSection = app.getVar('lastSections').find(s => s.label === 'Father');
@@ -121,7 +121,7 @@ const { loadApp, check, summary } = require('../harness');
 1 CHIL @P4@
 `;
 
-  const app = loadApp({ rootA: 'I1', rootB: 'P1', maxGen: '2', descendantGen: '0' });
+  const app = loadApp({ rootA: 'I1', rootB: 'P1', maxGen: '2', descendantGen: '0', includeSiblings: true });
   app.loadGedcomFiles(gedA, gedB);
   app.runCompare();
   const fatherSection = app.getVar('lastSections').find(s => s.label === 'Father');

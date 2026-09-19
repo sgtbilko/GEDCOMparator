@@ -1,85 +1,87 @@
-// Shared harness: loads app.js (the GEDCOM Tree Comparator's logic, extracted from
-// gedcom-compare.html) into a sandboxed context with a stub `document`, so the
-// browser-only functions (parseGedcom, datesMatch, runCompare, etc.) can be
-// unit-tested directly from Node without a browser.
-//
-// If you edit gedcom-compare.html, regenerate app.js by running:
-//   node extract-app-js.js
-
+// Minimal reconstruction of the project's Node vm-based test harness:
+// loads GEDCOMparator.html's inline <script> into a sandboxed context with a
+// stubbed `document`, exposing top-level functions on the returned app object
+// plus loadGedcomFiles()/getVar() helpers for reading/writing top-level let/const state.
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-function stubElement(overrides = {}) {
-  return Object.assign({
-    style: {},
-    value: '',
-    checked: false,
-    innerHTML: '',
-    textContent: '',
-    addEventListener: () => {},
-    scrollIntoView: () => {}
-  }, overrides);
+function extractScript(html) {
+  const m = html.match(/<script>([\s\S]*?)<\/script>/);
+  if (!m) throw new Error('No <script> block found');
+  return m[1];
 }
 
-// idValues: { elementId: 'the .value or boolean to return' } — a simple way to
-// stand in for form fields (dropdowns, checkboxes, number inputs) that runCompare() reads.
-function loadApp(idValues = {}) {
-  const appPath = path.join(__dirname, 'app.js');
-  const js = fs.readFileSync(appPath, 'utf8');
-
-  const sandbox = {
-    console,
-    document: {
-      getElementById(id) {
-        if (id in idValues) {
-          const v = idValues[id];
-          if (typeof v === 'boolean') return stubElement({ checked: v });
-          return stubElement({ value: String(v) });
-        }
-        return stubElement();
-      }
+function makeStubDocument() {
+  const elements = {};
+  function el(id) {
+    if (!elements[id]) {
+      elements[id] = {
+        value: '', checked: false, textContent: '', innerHTML: '',
+        style: {}, disabled: false,
+        classList: { toggle() {}, add() {}, remove() {} },
+        addEventListener() {}, scrollIntoView() {}
+      };
     }
+    return elements[id];
+  }
+  return {
+    _el: el,
+    getElementById: id => el(id),
+    createElement: () => ({ style: {} })
   };
+}
+
+function loadApp(initial = {}) {
+  const scriptSrc = extractScript(fs.readFileSync(path.join(__dirname, 'GEDCOMparator.html'), 'utf8'));
+  const document = makeStubDocument();
+
+  // Seed defaults matching the real HTML's checked/value attributes exactly,
+  // so tests reflect actual default behavior; overrides layer on top.
+  const defaults = {
+    maxGen: '6', descendantGen: '0',
+    includeAncestorSpouses: true, includeSiblings: false, includeSibSpouses: false,
+    hideAllSubDetails: true, groupByAncestor: true, onlyShowMissing: false, hideExactMatches: true, hideReviewedItems: true,
+    ignoreLikelyAlive: true, hideNoBirthDate: false, ignoreSimilarLocations: true,
+    aliveYears: '80', locationThreshold: '50'
+  };
+  const merged = Object.assign({}, defaults, initial);
+  for (const [id, val] of Object.entries(merged)) {
+    const e = document._el(id);
+    if (typeof val === 'boolean') e.checked = val; else e.value = val;
+  }
+
+  const sandbox = { document, console, URL, Date };
   vm.createContext(sandbox);
-  vm.runInContext(js, sandbox);
+  vm.runInContext(scriptSrc, sandbox);
 
-  // IMPORTANT: app.js declares `let dataA = null, dataB = null;` at its top level.
-  // Assigning `sandbox.dataA = ...` from out here would NOT update that binding —
-  // top-level `let`/`const` in a vm context live in a lexical environment that
-  // doesn't alias to context-object properties. Setting them must happen via code
-  // run *inside* the context instead, which this helper does for you.
-  sandbox.loadGedcomFiles = function loadGedcomFiles(gedA, gedB) {
-    vm.runInContext(
-      `dataA = parseGedcom(${JSON.stringify(gedA)}); dataB = parseGedcom(${JSON.stringify(gedB)});`,
-      sandbox
-    );
+  // Top-level `let`/`const` bindings (dataA, dataB, lastSections, ...) are NOT
+  // exposed as own properties of the sandbox object — that's normal vm/lexical
+  // scoping, not a bug — but they stay live across separate runInContext calls
+  // on the same context. So reading/writing them has to happen by running a
+  // further snippet *inside* the context, not by touching the sandbox object.
+  const app = { getVar: varName => vm.runInContext(varName, sandbox) };
+  for (const key of Object.keys(sandbox)) {
+    if (typeof sandbox[key] === 'function') app[key] = sandbox[key];
+  }
+  app.loadGedcomFiles = (gedA, gedB) => {
+    sandbox.__gedA = gedA;
+    sandbox.__gedB = gedB;
+    vm.runInContext('dataA = parseGedcom(__gedA); dataB = parseGedcom(__gedB);', sandbox);
   };
-
-  // Same story for reading a top-level `let`/`const` (e.g. lastSections) from outside —
-  // a plain `sandbox.lastSections` property read won't see it, since it was never a
-  // property to begin with. Evaluating the name as an expression inside the context does.
-  sandbox.getVar = function getVar(name) {
-    return vm.runInContext(name, sandbox);
-  };
-
-  return sandbox;
+  app._document = document;
+  return app;
 }
 
 let passCount = 0, failCount = 0;
-
-function check(actual, expected, description) {
-  const ok = JSON.stringify(actual) === JSON.stringify(expected);
-  if (ok) passCount++; else failCount++;
-  console.log(`${ok ? 'PASS' : 'FAIL'} | ${description}${ok ? '' : ` — got ${JSON.stringify(actual)}, expected ${JSON.stringify(expected)}`}`);
-  return ok;
+function check(actual, expected, desc) {
+  const pass = JSON.stringify(actual) === JSON.stringify(expected);
+  if (pass) passCount++; else failCount++;
+  console.log(`${pass ? 'PASS' : 'FAIL'} | ${desc}${pass ? '' : ` (expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)})`}`);
 }
-
-function summary(label) {
-  console.log(`\n${label}: ${passCount} passed, ${failCount} failed`);
-  const exitCode = failCount > 0 ? 1 : 0;
-  passCount = 0; failCount = 0;
-  return exitCode;
+function summary(name) {
+  console.log(`\n${name}: ${passCount} passed, ${failCount} failed`);
+  return failCount > 0 ? 1 : 0;
 }
 
 module.exports = { loadApp, check, summary };

@@ -51,7 +51,7 @@ const gedB = `0 @P1@ INDI
 1 CHIL @P3@
 `;
 
-const app = loadApp({ rootA: 'I1', rootB: 'P1', maxGen: '3', descendantGen: '2' });
+const app = loadApp({ rootA: 'I1', rootB: 'P1', maxGen: '3', descendantGen: '2', includeSiblings: true });
 app.loadGedcomFiles(gedA, gedB);
 app.runCompare();
 
