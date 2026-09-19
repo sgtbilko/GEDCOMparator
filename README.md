@@ -18,14 +18,13 @@ Matches are then shown with options to hide/show details as required based on yo
 
 ###### In Progress
 
-* Option to ONLY show matches with significant differences
+* n/a
 
 
 
 ###### Not Started
 
-* rework hide/show panel
+* rework hide/show panel, e.g. a slider for show all/show similar/show bad misses
 * Check after/before/about logic and tolerance
-* Ensure test
 * Find a way to add a link to ancestry pages (probably not possible)
 
