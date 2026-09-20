@@ -152,6 +152,21 @@ v29 - Added a three-way "Father's side / Both sides / Mother's side"
       matched/compared/missing counts to match the selected scope,
       since it's a real reduction of what's being compared rather than
       just a decluttering choice.
+
+v30 - "Reviewed" marks now persist across closing and reopening the page,
+      not just across a fresh comparison: they're saved to the browser's
+      localStorage under a key fingerprinting exactly the two loaded
+      files' contents (so a different pair of files never sees another
+      pair's marks), and are keyed per-person (by each file's GEDCOM
+      xref) rather than by the row's numeric id — row ids are only ever
+      stable for one render, reassigned from scratch on every
+      comparison, so a person-based key is what lets a mark survive
+      even a changed maxGen/generations setting reshuffling row order.
+      Storage failures (private browsing, some browsers' restrictions
+      on file:// pages, quota) are non-fatal — reviewed marks simply
+      won't persist that session, and nothing else breaks. Added a
+      "Clear saved review marks" link next to "Hide reviewed items" to
+      wipe the saved marks for the current pair of files.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -407,6 +422,17 @@ v29 - Added a three-way "Father's side / Both sides / Mother's side"
   .report-controls > div { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
   .report-controls label { font-size: 13px; cursor: pointer; }
   .side-select { width: auto; margin-top: 0; margin-left: 6px; display: inline-block; padding: 5px 8px; }
+  .link-button {
+    background: none;
+    border: none;
+    padding: 0;
+    margin-left: 10px;
+    font-size: 12px;
+    color: var(--accent);
+    text-decoration: underline;
+    cursor: pointer;
+  }
+  .link-button:hover { opacity: 0.75; }
   .slider-wrap { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
   .slider-wrap input[type="range"] { width: 100px; margin-top: 0; accent-color: var(--accent); }
   .slider-wrap span#aliveYearsVal, .slider-wrap span#locationThresholdVal { color: var(--ink); font-weight: 600; min-width: 28px; }
@@ -539,6 +565,8 @@ v29 - Added a three-way "Father's side / Both sides / Mother's side"
     <div>
       <input type="checkbox" id="hideReviewedItems" checked onchange="onFilterChange()" />
       <label for="hideReviewedItems">Hide reviewed items</label>
+      <span class="hint" style="margin-left:6px;">(remembered automatically for these two files)</span>
+      <button type="button" class="link-button" onclick="clearReviewedForTheseFiles()">Clear saved review marks</button>
     </div>
   </div>
 
@@ -548,6 +576,11 @@ v29 - Added a three-way "Father's side / Both sides / Mother's side"
 <script>
 let dataA = null, dataB = null;
 let allOptionsA = [], allOptionsB = [];
+// Raw file text is kept alongside the parsed data purely so a stable
+// "which two files is this" fingerprint can be computed once both are
+// loaded (see reviewStorageKey) — that's what lets "Reviewed" marks survive
+// closing and reopening the page, scoped to this exact pair of files.
+let rawTextA = '', rawTextB = '';
 // Once the person edits the File B filter box themselves, File A's filter
 // stops overwriting it — see onRootAFilterInput / onRootBFilterInput below.
 let rootBFilterEditedByUser = false;
@@ -565,7 +598,8 @@ function handleFile(e, which) {
     try {
       const parsed = parseGedcom(ev.target.result);
       const count = Object.keys(parsed.individuals).length;
-      if (which === 'A') dataA = parsed; else dataB = parsed;
+      if (which === 'A') { dataA = parsed; rawTextA = ev.target.result; }
+      else { dataB = parsed; rawTextB = ev.target.result; }
       statusEl.textContent = `Loaded ${count} individuals.`;
       maybeShowRootPanel();
     } catch (err) {
@@ -587,6 +621,12 @@ function maybeShowRootPanel() {
   document.getElementById('rootAFilter').value = '';
   document.getElementById('rootBFilter').value = '';
   tryAutoMatchRoot();
+  // A fingerprint of exactly these two files' contents, so "Reviewed" marks
+  // (persisted in localStorage — see loadReviewedFromStorage/
+  // saveReviewedToStorage) are recalled automatically when this same pair
+  // of files is loaded again, but never bleed into a comparison of two
+  // different files.
+  reviewStorageKey = 'gedcomparator-reviewed:' + hashString(rawTextA) + ':' + hashString(rawTextB);
 }
 
 function buildOptionList(data) {
@@ -1564,11 +1604,14 @@ function runCompare() {
   const includeSibSpouses = document.getElementById('includeSibSpouses').checked && includeSiblings;
   const descendantGen = parseInt(document.getElementById('descendantGen').value, 10) || 0;
 
-  // A fresh comparison means a fresh set of row ids, so any previously-reviewed
-  // rows (from a prior comparison) no longer apply. Section collapse state is
-  // also reset — lineage codes (F, M, FF, ...) are stable across comparisons,
-  // but a fresh compare is treated as a clean slate the same way reviewedIds is.
-  reviewedIds = new Set();
+  // Row ids reset every comparison (they're only used within this render —
+  // e.g. as flat-mode collapse-section keys — never persisted). Reviewed
+  // marks are the opposite: they're keyed by person, not by row id, and are
+  // reloaded from localStorage for this exact pair of files (see
+  // personKey/reviewStorageKey) so they survive not just a fresh comparison
+  // but closing and reopening the page entirely. Section collapse state
+  // still resets to a clean slate on every fresh compare.
+  reviewedIds = loadReviewedFromStorage();
   rowIdCounter = 0;
   collapsedSections = new Set();
 
@@ -1875,7 +1918,7 @@ function rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold) {
 function computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold) {
   let status = 'green';
   for (const row of section.rows) {
-    if (reviewedIds.has(row.id)) continue;
+    if (reviewedIds.has(personKey(row))) continue;
     if (row.status === 'missA' || row.status === 'missB') {
       if (ignoreLikelyAlive && isLikelyAlive(row, aliveYears)) continue;
       status = 'red';
@@ -1908,19 +1951,75 @@ function statusBadge(status, substantiallyDifferent) {
 
 let lastSections = null;
 
-// Reviewed-state tracking: each row gets a stable numeric id when the report is
-// built (see nextRowId()). Ticking a row's "Reviewed" checkbox adds its id to
-// reviewedIds, which hides that row on the next render unless "Hide reviewed
-// items" is unchecked. This state is intentionally independent of the other
-// filters (hide exact matches / hide likely-alive / similar locations) — once
-// reviewed, a row is simply done, and is excluded before any other filter logic
-// runs.
+// Reviewed-state tracking. Each row is identified for this purpose by
+// personKey() — the pair of GEDCOM xrefs (aId/bId) it represents — rather
+// than its numeric row.id, since row.id is only stable for the current
+// render (it's reassigned from scratch every runCompare(), including in a
+// different order if generations/toggles change) whereas a person's own
+// xref in each file never changes. That's what lets reviewed marks survive
+// not just a fresh comparison but closing and reopening the page entirely:
+// they're persisted to localStorage under a key fingerprinting exactly
+// these two files (reviewStorageKey, set in maybeShowRootPanel), and reloaded
+// every time runCompare() runs. This state is intentionally independent of
+// the other filters (hide exact matches / hide likely-alive / similar
+// locations) — once reviewed, a row is simply done, and is excluded before
+// any other filter logic runs.
 let reviewedIds = new Set();
+let reviewStorageKey = null;
 let rowIdCounter = 0;
 function nextRowId() { return rowIdCounter++; }
 
-function toggleReviewed(id, checked) {
-  if (checked) reviewedIds.add(id); else reviewedIds.delete(id);
+function personKey(row) {
+  return (row.aId || '') + '|' + (row.bId || '');
+}
+
+// A small, fast, non-cryptographic hash (FNV-1a, 32-bit) — just enough to
+// fingerprint a file's contents for the storage key, not for anything
+// security-sensitive.
+function hashString(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16);
+}
+
+// localStorage can be unavailable or throw (private browsing, some browsers'
+// restrictions on file:// pages, storage quota) — treated as non-fatal in
+// both directions: a failed load just starts with nothing reviewed, and a
+// failed save just means marks won't be there next time, but the report
+// itself keeps working either way.
+function loadReviewedFromStorage() {
+  if (!reviewStorageKey) return new Set();
+  try {
+    const raw = localStorage.getItem(reviewStorageKey);
+    return raw ? new Set(JSON.parse(raw)) : new Set();
+  } catch (e) {
+    return new Set();
+  }
+}
+
+function saveReviewedToStorage() {
+  if (!reviewStorageKey) return;
+  try {
+    localStorage.setItem(reviewStorageKey, JSON.stringify(Array.from(reviewedIds)));
+  } catch (e) {
+    // Ignored — see comment above.
+  }
+}
+
+function clearReviewedForTheseFiles() {
+  reviewedIds = new Set();
+  if (reviewStorageKey) {
+    try { localStorage.removeItem(reviewStorageKey); } catch (e) { /* ignored */ }
+  }
+  renderReport();
+}
+
+function toggleReviewed(key, checked) {
+  if (checked) reviewedIds.add(key); else reviewedIds.delete(key);
+  saveReviewedToStorage();
   renderReport();
 }
 
@@ -2052,7 +2151,7 @@ function renderReport() {
     // A reviewed row is hidden unconditionally (unless "Show reviewed items" is
     // on) — it's excluded before any of the other filter logic even runs, since
     // once reviewed a row is simply done and shouldn't count toward the other stats.
-    if (reviewedIds.has(row.id) && hideReviewedItems) { hiddenReviewed++; return null; }
+    if (reviewedIds.has(personKey(row)) && hideReviewedItems) { hiddenReviewed++; return null; }
     // A person with no recorded birth date (on either side, for a matched pair)
     // is excluded entirely when this option is on — applies regardless of status.
     if (hideNoBirthDate && !normVal(row.birthDate)) { hiddenNoBirthDate++; return null; }
@@ -2181,7 +2280,7 @@ function renderReport() {
         <span class="gen">${headerRight}</span>
       </div>`;
     for (const row of section.rows) {
-      const isReviewed = reviewedIds.has(row.id);
+      const isReviewed = reviewedIds.has(personKey(row));
       const yearsSuffix = matchYearsSuffix(row);
       // Flat mode has no bordered match-card beneath the header — just the
       // attributes, laid directly under it — since the header IS this row.
@@ -2195,7 +2294,7 @@ function renderReport() {
             ${statusBadge(row.status, row.substantiallyDifferent)}
           </div>
           <label class="reviewed-inline">
-            <input type="checkbox" ${isReviewed ? 'checked' : ''} onchange="toggleReviewed(${row.id}, this.checked)" />
+            <input type="checkbox" ${isReviewed ? 'checked' : ''} onchange="toggleReviewed('${personKey(row).replace(/'/g, "\\'")}', this.checked)" />
             Reviewed
           </label>
         </div>`;
