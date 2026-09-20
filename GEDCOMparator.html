@@ -167,6 +167,15 @@ v30 - "Reviewed" marks now persist across closing and reopening the page,
       won't persist that session, and nothing else breaks. Added a
       "Clear saved review marks" link next to "Hide reviewed items" to
       wipe the saved marks for the current pair of files.
+
+v31 - Fixed a scroll-jump bug: renderReport() unconditionally scrolled the
+      report into view every time it ran, so ticking/unticking Reviewed,
+      any filter checkbox or slider, switching display mode, or the
+      "Hide all sub-details" master checkbox all yanked the page back to
+      the top of the report on every interaction. The report now only
+      auto-scrolls into view once — the first time it appears after
+      clicking "Compare trees" — and stays put through every subsequent
+      re-render until the next fresh comparison.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -1614,6 +1623,9 @@ function runCompare() {
   reviewedIds = loadReviewedFromStorage();
   rowIdCounter = 0;
   collapsedSections = new Set();
+  // A fresh compare should scroll down to reveal the new report once, same
+  // as it always has.
+  hasScrolledToReport = false;
 
   const lineageA = buildLineage(dataA, rootA, maxGen);
   const lineageB = buildLineage(dataB, rootB, maxGen);
@@ -1950,6 +1962,14 @@ function statusBadge(status, substantiallyDifferent) {
 }
 
 let lastSections = null;
+// Scrolling the report into view is only wanted the FIRST time it appears
+// after clicking "Compare trees" — not on every subsequent re-render, which
+// happens constantly from ordinary interaction (ticking/unticking Reviewed,
+// any filter checkbox or slider, collapsing a section via the master
+// checkbox, switching display mode, ...). Without this guard, every one of
+// those re-renders would yank the page back to the top of the report,
+// discarding whatever the person had scrolled down to look at.
+let hasScrolledToReport = false;
 
 // Reviewed-state tracking. Each row is identified for this purpose by
 // personKey() — the pair of GEDCOM xrefs (aId/bId) it represents — rather
@@ -2326,7 +2346,10 @@ function renderReport() {
 
   el.innerHTML = html;
   el.style.display = 'block';
-  el.scrollIntoView({ behavior: 'smooth' });
+  if (!hasScrolledToReport) {
+    el.scrollIntoView({ behavior: 'smooth' });
+    hasScrolledToReport = true;
+  }
 }
 </script>
 </body>

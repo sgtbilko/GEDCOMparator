@@ -18,13 +18,12 @@ Matches are then shown with options to hide/show details as required based on yo
 
 ###### In Progress
 
-* don't scroll back up when ticking/unticking
+* nearest wikitree isn't should always be father/mother/child/grandchildren in that order
 
 
 
 ###### Not Started
 
-* nearest wikitree isn't should always be father/mother/child/grandchildren in that order
 * rework hide/show panel, e.g. a slider for show all/show similar/show bad misses
 * Check after/before/about logic and tolerance
 * Find a way to add a link to ancestry pages (probably not possible)
