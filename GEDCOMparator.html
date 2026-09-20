@@ -190,6 +190,24 @@ v32 - Rewrote the "Nearest WikiTree" fallback from a fixed relationship-type
       previously lose out to an equally-close spouse) and, as a side
       effect, now also finds siblings, grandparents, grandchildren, and
       in-laws, which the old fixed list could never reach.
+
+v33 - Amended the colour scheme: missing from EITHER file is now always
+      purple (previously red for File A, purple for File B — an
+      inconsistency where colour depended on which file the gap was in,
+      with no real meaning behind it). Red is now reserved exclusively
+      for a matched pair flagged as substantially different. This
+      affects the "Missing in File A/B" badges (now identical purple,
+      distinguished only by their text), the summary's "Missing from
+      File A/B shown" cards, the report legend, and the section-header
+      status colour, which is now a four-way red > purple > amber > green
+      ranking (previously three-way, with "missing" and "substantially
+      different" both folded into the same red). Renamed the underlying
+      CSS variables from --miss/--missB to --sig-diff/--missing for
+      clarity, and reworded "Only show items with significant differences
+      (red)" to "Only show items needing attention (red or purple)" to
+      match — its underlying selection (missing-or-substantially-
+      different) is unchanged, only the label was inaccurate once red
+      stopped covering missing entries.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -208,10 +226,10 @@ v32 - Rewrote the "Nearest WikiTree" fallback from a fixed relationship-type
     --line: #e4e0da;
     --warn: #f4b942;
     --warn-soft: #fdf3d9;
-    --miss: #c1543f;
-    --miss-soft: #fbe6e2;
-    --missB: #7c4a9e;
-    --missB-soft: #f0e4f7;
+    --sig-diff: #c1543f;
+    --sig-diff-soft: #fbe6e2;
+    --missing: #7c4a9e;
+    --missing-soft: #f0e4f7;
     --ok-soft: #e4efe9;
   }
   * { box-sizing: border-box; }
@@ -292,10 +310,14 @@ v32 - Rewrote the "Nearest WikiTree" fallback from a fixed relationship-type
   .summary .card.matches .num { color: var(--accent); }
   .summary .card.diffs { background: var(--warn-soft); border-color: var(--warn); }
   .summary .card.diffs .num { color: #8a6d1f; }
-  .summary .card.missA { background: var(--miss-soft); border-color: var(--miss); }
-  .summary .card.missA .num { color: var(--miss); }
-  .summary .card.missB { background: var(--missB-soft); border-color: var(--missB); }
-  .summary .card.missB .num { color: var(--missB); }
+  /* Missing-from-either-file is always purple now, regardless of which file
+     — File A and File B are told apart by their label text, not colour.
+     Red is reserved exclusively for a matched pair flagged as substantially
+     different (see .badge.substantial-diff / .section-head.status-red). */
+  .summary .card.missA { background: var(--missing-soft); border-color: var(--missing); }
+  .summary .card.missA .num { color: var(--missing); }
+  .summary .card.missB { background: var(--missing-soft); border-color: var(--missing); }
+  .summary .card.missB .num { color: var(--missing); }
   .summary .num { font-size: 22px; font-weight: 600; }
   .summary .lbl { font-size: 12px; color: var(--muted); }
   .section {
@@ -364,24 +386,29 @@ v32 - Rewrote the "Nearest WikiTree" fallback from a fixed relationship-type
     white-space: nowrap;
   }
   .badge.both { background: var(--ok-soft); color: var(--accent); }
-  .badge.missA { background: var(--miss-soft); color: var(--miss); }
-  .badge.missB { background: var(--missB-soft); color: var(--missB); }
+  .badge.missA { background: var(--missing-soft); color: var(--missing); }
+  .badge.missB { background: var(--missing-soft); color: var(--missing); }
   .badge.maybe { background: var(--warn-soft); color: #8a6d1f; }
-  .badge.substantial-diff { background: var(--miss-soft); color: var(--miss); }
+  .badge.substantial-diff { background: var(--sig-diff-soft); color: var(--sig-diff); }
   /* A matched individual's name (within its match-card) turns red when its own
      details are substantially different (see isSubstantiallyDifferent) — a
      name that isn't just a spelling variant/missing middle name, or a birth
      date/place that doesn't just look like the same event recorded loosely. */
-  .match-card.substantial-diff .match-header-name { color: var(--miss); }
+  .match-card.substantial-diff .match-header-name { color: var(--sig-diff); }
   /* The ancestor section header itself is coloured by computeSectionStatus(),
      which looks at EVERY row under that ancestor (not just the ancestor's own
-     row): red if anything is missing or substantially different, amber if
-     there's an unresolved "maybe" or a routine recorded difference, green
-     when everything is a clean match or has been excused by the person's
-     settings/review. status-green matches the original default background. */
+     row) and picks the single worst status present, worst first: red if
+     anything is a matched pair flagged as substantially different; else
+     purple if anything is missing from either file (not red — red is
+     reserved exclusively for substantial differences); else amber if
+     there's an unresolved "maybe" or a routine recorded difference; else
+     green, when everything is a clean match or has been excused by the
+     person's settings/review. status-green matches the original default
+     background. */
   .section-head.status-green { background: var(--accent-soft); }
   .section-head.status-amber { background: var(--warn-soft); }
-  .section-head.status-red { background: var(--miss-soft); }
+  .section-head.status-purple { background: var(--missing-soft); }
+  .section-head.status-red { background: var(--sig-diff-soft); }
   .role-tag {
     font-size: 10px;
     color: var(--muted);
@@ -419,7 +446,7 @@ v32 - Rewrote the "Nearest WikiTree" fallback from a fixed relationship-type
   }
   .match-attrs table { border: none; }
   .diff-cell { background: var(--warn-soft); border-radius: 5px; padding: 2px 6px; }
-  .diff-cell .a { color: var(--miss); }
+  .diff-cell .a { color: var(--sig-diff); }
   .diff-cell .b { color: var(--accent); }
   .same-cell { color: var(--ink); }
   .similar-cell { background: var(--ok-soft); border-radius: 5px; padding: 2px 6px; color: var(--ink); }
@@ -557,7 +584,7 @@ v32 - Rewrote the "Nearest WikiTree" fallback from a fixed relationship-type
     </div>
     <div>
       <input type="checkbox" id="onlySignificant" onchange="onOnlySignificantChange()" />
-      <label for="onlySignificant">Only show items with significant differences (red)</label>
+      <label for="onlySignificant">Only show items needing attention (red or purple)</label>
     </div>
     <div>
       <input type="checkbox" id="hideExactMatches" checked onchange="onFilterChange()" />
@@ -1938,15 +1965,18 @@ function rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold) {
 // The colour of an ancestor section's header, computed over EVERY row in
 // that section (ancestor, siblings, spouses, descendants, ...) — not just the
 // ancestor's own row — so the header is a genuine "does anything under here
-// need attention" signal:
-//  - red:   at least one row is missing from a file, or is a matched pair
-//           flagged as substantially different (see isSubstantiallyDifferent).
-//  - amber: otherwise, at least one row is an unverified "maybe" match, or a
-//           matched pair with a real (non-substantial) recorded difference —
-//           one that isn't excused by "treat similar locations as matching".
-//  - green: everything else — every row is either a clean match or has been
-//           excused by the person's own settings or judgement.
-// A row is skipped entirely (never counted red/amber) when:
+// need attention" signal. Ranked worst to best:
+//  - red:    at least one row is a matched pair flagged as substantially
+//            different (see isSubstantiallyDifferent) — red is reserved
+//            exclusively for this; a missing person is never red.
+//  - purple: otherwise, at least one row is missing from a file (either
+//            file — colour no longer distinguishes which one).
+//  - amber:  otherwise, at least one row is an unverified "maybe" match, or a
+//            matched pair with a real (non-substantial) recorded difference —
+//            one that isn't excused by "treat similar locations as matching".
+//  - green:  everything else — every row is either a clean match or has been
+//            excused by the person's own settings or judgement.
+// A row is skipped entirely (never counted toward any of the above) when:
 //  - it's been individually marked "Reviewed" — the person has looked at it
 //    and dealt with it, regardless of what the "hide reviewed" filter shows;
 //  - it's a missing person excused by "hide people likely still alive";
@@ -1954,20 +1984,30 @@ function rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold) {
 // These mirror the same settings used to decide what's shown in the report,
 // so the header colour and the report body never disagree about what counts
 // as resolved.
+// Severity ranking for a section's overall status — red (a confirmed
+// substantial difference) outranks purple (something missing), which
+// outranks amber (an unresolved/minor difference), which outranks green.
+const SECTION_STATUS_RANK = { green: 0, amber: 1, purple: 2, red: 3 };
+
 function computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold) {
   let status = 'green';
+  function upgrade(candidate) {
+    if (SECTION_STATUS_RANK[candidate] > SECTION_STATUS_RANK[status]) status = candidate;
+  }
   for (const row of section.rows) {
     if (reviewedIds.has(personKey(row))) continue;
     if (row.status === 'missA' || row.status === 'missB') {
       if (ignoreLikelyAlive && isLikelyAlive(row, aliveYears)) continue;
-      status = 'red';
+      // Missing from either file is purple, never red — red is reserved
+      // exclusively for a matched pair flagged as substantially different.
+      upgrade('purple');
       continue;
     }
     // status is 'both' or 'maybe'
     if (hideNoBirthDate && !normVal(row.birthDate)) continue;
-    if (row.substantiallyDifferent) { status = 'red'; continue; }
+    if (row.substantiallyDifferent) { upgrade('red'); continue; }
     if (row.status === 'maybe' || rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold)) {
-      if (status !== 'red') status = 'amber';
+      upgrade('amber');
     }
   }
   return status;
@@ -2203,10 +2243,11 @@ function renderReport() {
     // is excluded entirely when this option is on — applies regardless of status.
     if (hideNoBirthDate && !normVal(row.birthDate)) { hiddenNoBirthDate++; return null; }
     const likelyAlive = ignoreLikelyAlive && isLikelyAlive(row, aliveYears);
-    // "Significant" here means the same thing a red section header means (see
-    // computeSectionStatus): a non-excused missing person, or a matched pair
-    // flagged as substantially different. An unverified "maybe" match or an
-    // ordinary recorded difference is amber, not red, so it doesn't qualify.
+    // "Needs attention" here means the same thing a red or purple section
+    // header means (see computeSectionStatus): a non-excused missing person
+    // (purple), or a matched pair flagged as substantially different (red).
+    // An unverified "maybe" match or an ordinary recorded difference is
+    // amber, not red or purple, so it doesn't qualify.
     let isSignificant;
     if (row.status === 'missA' || row.status === 'missB') {
       // "Ignore all people likely still alive" removes missing-person rows for them.
@@ -2291,9 +2332,9 @@ function renderReport() {
 
   html += `<div class="legend">
     <span><span class="dot" style="background:var(--accent-soft)"></span>In both files</span>
-    <span><span class="dot" style="background:var(--miss-soft)"></span>Missing from File A</span>
-    <span><span class="dot" style="background:var(--missB-soft)"></span>Missing from File B</span>
+    <span><span class="dot" style="background:var(--missing-soft)"></span>Missing from either file</span>
     <span><span class="dot" style="background:var(--warn-soft)"></span>Possible match / needs verification</span>
+    <span><span class="dot" style="background:var(--sig-diff-soft)"></span>Substantial difference</span>
   </div>`;
 
   if (!displaySections.length) {
