@@ -176,6 +176,20 @@ v31 - Fixed a scroll-jump bug: renderReport() unconditionally scrolled the
       auto-scrolls into view once — the first time it appears after
       clicking "Compare trees" — and stays put through every subsequent
       re-render until the next fresh comparison.
+
+v32 - Rewrote the "Nearest WikiTree" fallback from a fixed relationship-type
+      list (spouse, then child, then parent, then deeper descendants —
+      which never reached siblings, grandparents, or in-laws at all) into a
+      genuine breadth-first search outward from the person, so the first
+      link found really is the fewest possible steps away. Children and
+      parents (blood, one step) are always checked before a spouse (also
+      one step, but by marriage) found at the same depth; beyond that, each
+      step outward is only explored once the previous step has come up
+      completely empty, checked across both files before going further.
+      This fixes a real bug (a one-step-away parent or child could
+      previously lose out to an equally-close spouse) and, as a side
+      effect, now also finds siblings, grandparents, grandchildren, and
+      in-laws, which the old fixed list could never reach.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -854,12 +868,18 @@ function classifyWebLink(rawUrl) {
 
 // ---------- "Nearest WikiTree" fallback ----------
 // When a person has no WikiTree link of their own, we look outward from their
-// own record(s) for the closest relative who does, in a fixed preference
-// order: spouse, then child, then parent, then any other descendant
-// (grandchild or further). Each tier is checked across BOTH files before
-// moving to the next tier, since a spouse recorded only in File B should
-// still win over a child recorded in File A. Returns null when nothing in
-// that scope has a WikiTree link — callers should then simply omit the button.
+// own record(s) for the closest relative who does — genuinely closest, by
+// number of family-tree steps (a breadth-first search), not a fixed list of
+// relationship types. Children and parents (blood, one step away) are always
+// checked before a spouse (also one step away, but by marriage) at the same
+// depth; beyond that, each new step outward (siblings, grandparents,
+// grandchildren, in-laws, ...) is only explored once everything at the
+// current step has come up empty, so the first link found really is the
+// fewest possible steps from the person in question. Each step is checked
+// across BOTH files before moving further out, since a spouse recorded only
+// in File B should still win over, say, a grandchild recorded in File A.
+// Returns null when nothing within a generous depth has a WikiTree link —
+// callers should then simply omit the button.
 function hasWikiTreeLink(links) {
   return !!(links && links.some(l => l.label === 'WikiTree'));
 }
@@ -909,60 +929,67 @@ function firstWikiTreeUrl(candidates) {
   return null;
 }
 
-// Descendants two or more generations down (grandchildren, great-grandchildren, …) —
-// i.e. anyone reachable via getChildren() who is not a direct child.
-function getDeeperDescendants(data, indiId) {
-  if (!indiId) return [];
-  const directChildren = getChildren(data, indiId);
-  const seen = new Set(directChildren);
-  const out = [];
-  let queue = [];
-  for (const childId of directChildren) queue.push(...getChildren(data, childId));
-  while (queue.length) {
-    const id = queue.shift();
-    if (seen.has(id)) continue;
-    seen.add(id);
-    if (data.individuals[id]) out.push(data.individuals[id]);
-    queue.push(...getChildren(data, id));
-  }
-  return out;
-}
-
-// Wraps each candidate individual with a reference to "the other file", so
-// firstWikiTreeUrl can fall back to a counterpart lookup when the candidate's
-// own record (found via just one file) has no WikiTree link.
-function withOther(individuals, other) {
-  return individuals.filter(Boolean).map(ind => ({ ind, other }));
-}
+// How far out the BFS is willing to search. Generous — covers everything
+// from siblings and grandparents out to great-great-grandchildren and
+// several flavours of in-law — but still bounded, since an unbounded search
+// with nobody anywhere having a WikiTree link would otherwise walk every
+// individual reachable in the file, and this fallback runs once per person
+// missing a link.
+const NEAREST_WIKITREE_MAX_DEPTH = 8;
 
 function findNearestWikiTreeUrl(dataA, dataB, aId, bId) {
-  // Tier 1: spouse(s)
-  let candidates = [];
-  if (aId) candidates.push(...withOther(getSpousesWithMarriage(dataA, aId).map(s => dataA.individuals[s.spouseId]), dataB));
-  if (bId) candidates.push(...withOther(getSpousesWithMarriage(dataB, bId).map(s => dataB.individuals[s.spouseId]), dataA));
-  let url = firstWikiTreeUrl(candidates);
-  if (url) return url;
+  // Each BFS frontier entry is { id, file }, tracking which file's graph it
+  // belongs to (the two files' graphs are walked in lockstep but are never
+  // fused into one — matchLists()/findCounterpartInOtherFile()'s per-
+  // candidate fallback already covers "this same person might have their
+  // link recorded on the other side" without needing an authoritative
+  // id-to-id map between the two trees).
+  const visitedA = new Set(aId ? [aId] : []);
+  const visitedB = new Set(bId ? [bId] : []);
+  let frontier = [];
+  if (aId) frontier.push({ id: aId, file: 'A' });
+  if (bId) frontier.push({ id: bId, file: 'B' });
 
-  // Tier 2: child(ren)
-  candidates = [];
-  if (aId) candidates.push(...withOther(getChildren(dataA, aId).map(id => dataA.individuals[id]), dataB));
-  if (bId) candidates.push(...withOther(getChildren(dataB, bId).map(id => dataB.individuals[id]), dataA));
-  url = firstWikiTreeUrl(candidates);
-  if (url) return url;
+  for (let depth = 0; depth < NEAREST_WIKITREE_MAX_DEPTH && frontier.length; depth++) {
+    const bloodNext = [], spouseNext = [];
+    const bloodCandidates = [], spouseCandidates = [];
 
-  // Tier 3: parent(s)
-  candidates = [];
-  if (aId) { const p = getParents(dataA, aId); candidates.push(...withOther([dataA.individuals[p.father], dataA.individuals[p.mother]], dataB)); }
-  if (bId) { const p = getParents(dataB, bId); candidates.push(...withOther([dataB.individuals[p.father], dataB.individuals[p.mother]], dataA)); }
-  url = firstWikiTreeUrl(candidates);
-  if (url) return url;
+    for (const node of frontier) {
+      const data = node.file === 'A' ? dataA : dataB;
+      const other = node.file === 'A' ? dataB : dataA;
+      const visited = node.file === 'A' ? visitedA : visitedB;
 
-  // Tier 4: any other descendant (grandchild or further)
-  candidates = [];
-  if (aId) candidates.push(...withOther(getDeeperDescendants(dataA, aId), dataB));
-  if (bId) candidates.push(...withOther(getDeeperDescendants(dataB, bId), dataA));
-  url = firstWikiTreeUrl(candidates);
-  if (url) return url;
+      // Children and parents are both exactly one step away by blood, so
+      // they're gathered into the same "blood" bucket and checked ahead of
+      // any spouse found at this same depth (see the note above).
+      for (const cid of getChildren(data, node.id)) {
+        if (visited.has(cid)) continue;
+        visited.add(cid);
+        bloodNext.push({ id: cid, file: node.file });
+        bloodCandidates.push({ ind: data.individuals[cid], other });
+      }
+      const { father, mother } = getParents(data, node.id);
+      for (const pid of [father, mother]) {
+        if (!pid || visited.has(pid)) continue;
+        visited.add(pid);
+        bloodNext.push({ id: pid, file: node.file });
+        bloodCandidates.push({ ind: data.individuals[pid], other });
+      }
+      for (const s of getSpousesWithMarriage(data, node.id)) {
+        if (visited.has(s.spouseId)) continue;
+        visited.add(s.spouseId);
+        spouseNext.push({ id: s.spouseId, file: node.file });
+        spouseCandidates.push({ ind: data.individuals[s.spouseId], other });
+      }
+    }
+
+    const bloodUrl = firstWikiTreeUrl(bloodCandidates);
+    if (bloodUrl) return bloodUrl;
+    const spouseUrl = firstWikiTreeUrl(spouseCandidates);
+    if (spouseUrl) return spouseUrl;
+
+    frontier = bloodNext.concat(spouseNext);
+  }
 
   return null;
 }

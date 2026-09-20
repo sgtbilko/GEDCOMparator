@@ -18,7 +18,7 @@ Matches are then shown with options to hide/show details as required based on yo
 
 ###### In Progress
 
-* nearest wikitree isn't should always be father/mother/child/grandchildren in that order
+* N/A
 
 
 
