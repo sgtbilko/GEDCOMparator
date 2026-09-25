@@ -208,6 +208,55 @@ v33 - Amended the colour scheme: missing from EITHER file is now always
       match — its underlying selection (missing-or-substantially-
       different) is unchanged, only the label was inaccurate once red
       stopped covering missing entries.
+
+v34 - Reworked the 4-box summary to match the v33 colour scheme: the two
+      separate "Missing from File A/B shown" (purple) cards are now one
+      merged "Missing from either file shown" card, with the File A/B
+      split moved into small print beneath the combined number instead
+      of two side-by-side cards. Added a new red card, "Matched with
+      significant differences", counting substantially-different matches
+      specifically (as opposed to the existing amber "Matched with
+      attribute differences" card, which counts any recorded diff) —
+      placed between the amber and purple cards, so the row now reads
+      green (matched & compared) > amber (any difference) > red
+      (substantial difference) > purple (missing from either file).
+
+v35 - Split the "green" (clean match) status into two shades: a deeper
+      green for a genuinely EXACT match (every compared field literally
+      identical), and the original lighter green for a match that's only
+      counted as matching thanks to a leniency setting — a date recognized
+      as equivalent despite different wording (e.g. "12 Nov 1900" vs.
+      "12 November 1900"), or a location within the "treat similar
+      locations as matching" threshold (new matchExactness() helper). This
+      applies to both the section-header status (now a five-way exact >
+      similar > amber > purple > red ranking, best to worst) and each
+      matched row's own badge ("Exact match" vs. the existing "In both"),
+      and is recomputed live against the current similar-locations
+      threshold, same as every other leniency-dependent classification in
+      the app. The legend gained a matching extra entry.
+
+v36 - Expanded the summary from 4 boxes to 5, one per status colour —
+      exact, similar, needs verification (amber), substantial difference
+      (red), and missing from either file (purple, still merged with its
+      File A/File B sub-label) — in the same worst-to-best order used
+      throughout the report. The separate colour-key legend underneath is
+      gone: with a labelled, counted box for every colour, it was just
+      repeating information the boxes already show. The "amber" box's
+      count also got more precise in the process — it now counts only
+      ordinary (non-substantial) differences, since a substantially-
+      different match has its own dedicated red box instead of being
+      counted in both.
+
+v37 - Recoloured "missing from either file" from purple to a deep, dark
+      red — a distinct shade from the brighter red already used for a
+      substantially different match, so the two stay visually
+      distinguishable while both now read as "in the red family, needs
+      attention" at a glance. Internally, the status name changed from
+      "purple" to "missing" throughout (CSS class, JS status value) to
+      match, since keeping the old name would have meant a class called
+      "purple" rendering red. The "Only show items needing attention"
+      checkbox's label was reworded from "(red or purple)" to "(missing
+      or significantly different)" for the same reason.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -228,9 +277,20 @@ v33 - Amended the colour scheme: missing from EITHER file is now always
     --warn-soft: #fdf3d9;
     --sig-diff: #c1543f;
     --sig-diff-soft: #fbe6e2;
-    --missing: #7c4a9e;
-    --missing-soft: #f0e4f7;
+    /* A deeper, darker red than --sig-diff — used for "missing from either
+       file" so it stays visually distinct from a substantial difference
+       while both now read as "something needs attention" at a glance. */
+    --missing: #7a2418;
+    --missing-soft: #ecdad6;
     --ok-soft: #e4efe9;
+    /* A genuinely exact match (every field literally identical) gets a
+       deeper, more saturated green than a "similar" match (one only counted
+       as matching via a leniency setting — a date recognized as equivalent
+       despite different wording, or a location within the "treat similar
+       locations as matching" threshold), which keeps the original lighter
+       green (--accent/--accent-soft/--ok-soft). */
+    --exact: #1d4a3a;
+    --exact-soft: #c8e6d8;
   }
   * { box-sizing: border-box; }
   body {
@@ -305,19 +365,30 @@ v33 - Amended the colour scheme: missing from EITHER file is now always
     flex: 1;
     min-width: 140px;
   }
-  /* Same amber used to highlight differences in the list (.diff-cell). */
-  .summary .card.matches { background: var(--accent-soft); border-color: var(--accent); }
-  .summary .card.matches .num { color: var(--accent); }
+  /* The five summary cards ARE the colour legend now — one card per status,
+     in the same worst-to-best order used everywhere else in the report
+     (exact/similar are the two greens split in v35; diffs is amber;
+     substantial and missing are two distinct shades of red) — so a separate
+     legend explaining what each colour means is no longer needed underneath
+     them. */
+  .summary .card.exact { background: var(--exact-soft); border-color: var(--exact); }
+  .summary .card.exact .num { color: var(--exact); }
+  .summary .card.similar { background: var(--accent-soft); border-color: var(--accent); }
+  .summary .card.similar .num { color: var(--accent); }
   .summary .card.diffs { background: var(--warn-soft); border-color: var(--warn); }
   .summary .card.diffs .num { color: #8a6d1f; }
-  /* Missing-from-either-file is always purple now, regardless of which file
-     — File A and File B are told apart by their label text, not colour.
-     Red is reserved exclusively for a matched pair flagged as substantially
-     different (see .badge.substantial-diff / .section-head.status-red). */
-  .summary .card.missA { background: var(--missing-soft); border-color: var(--missing); }
-  .summary .card.missA .num { color: var(--missing); }
-  .summary .card.missB { background: var(--missing-soft); border-color: var(--missing); }
-  .summary .card.missB .num { color: var(--missing); }
+  .summary .card.substantial { background: var(--sig-diff-soft); border-color: var(--sig-diff); }
+  .summary .card.substantial .num { color: var(--sig-diff); }
+  /* Missing-from-either-file always uses the deep-red "--missing" colour now,
+     regardless of which file, and shown as ONE combined card — the File A/
+     File B split moves into .sublbl beneath the number instead of being two
+     separate cards. This is a distinct, deeper red from the brighter one
+     reserved exclusively for a matched pair flagged as substantially
+     different (see .card.substantial / .badge.substantial-diff /
+     .section-head.status-red). */
+  .summary .card.missing { background: var(--missing-soft); border-color: var(--missing); }
+  .summary .card.missing .num { color: var(--missing); }
+  .summary .sublbl { font-size: 11px; color: var(--muted); margin-top: 2px; }
   .summary .num { font-size: 22px; font-weight: 600; }
   .summary .lbl { font-size: 12px; color: var(--muted); }
   .section {
@@ -386,6 +457,7 @@ v33 - Amended the colour scheme: missing from EITHER file is now always
     white-space: nowrap;
   }
   .badge.both { background: var(--ok-soft); color: var(--accent); }
+  .badge.exact { background: var(--exact-soft); color: var(--exact); }
   .badge.missA { background: var(--missing-soft); color: var(--missing); }
   .badge.missB { background: var(--missing-soft); color: var(--missing); }
   .badge.maybe { background: var(--warn-soft); color: #8a6d1f; }
@@ -397,17 +469,19 @@ v33 - Amended the colour scheme: missing from EITHER file is now always
   .match-card.substantial-diff .match-header-name { color: var(--sig-diff); }
   /* The ancestor section header itself is coloured by computeSectionStatus(),
      which looks at EVERY row under that ancestor (not just the ancestor's own
-     row) and picks the single worst status present, worst first: red if
-     anything is a matched pair flagged as substantially different; else
-     purple if anything is missing from either file (not red — red is
-     reserved exclusively for substantial differences); else amber if
-     there's an unresolved "maybe" or a routine recorded difference; else
-     green, when everything is a clean match or has been excused by the
-     person's settings/review. status-green matches the original default
-     background. */
-  .section-head.status-green { background: var(--accent-soft); }
+     row) and picks the single worst status present, worst first: a brighter
+     red if anything is a matched pair flagged as substantially different;
+     else a deeper red ("missing") if anything is missing from either file
+     (a distinct shade so the two don't get confused with each other); else
+     amber if there's an unresolved "maybe" or a routine recorded difference;
+     else similar (the original lighter green) if every clean match is only a
+     match thanks to a leniency setting (see matchExactness()); else exact
+     (a deeper green), when literally everything is a clean, exact match or
+     has been excused by the person's settings/review. */
+  .section-head.status-exact { background: var(--exact-soft); }
+  .section-head.status-similar { background: var(--accent-soft); }
   .section-head.status-amber { background: var(--warn-soft); }
-  .section-head.status-purple { background: var(--missing-soft); }
+  .section-head.status-missing { background: var(--missing-soft); }
   .section-head.status-red { background: var(--sig-diff-soft); }
   .role-tag {
     font-size: 10px;
@@ -584,7 +658,7 @@ v33 - Amended the colour scheme: missing from EITHER file is now always
     </div>
     <div>
       <input type="checkbox" id="onlySignificant" onchange="onOnlySignificantChange()" />
-      <label for="onlySignificant">Only show items needing attention (red or purple)</label>
+      <label for="onlySignificant">Only show items needing attention (missing or significantly different)</label>
     </div>
     <div>
       <input type="checkbox" id="hideExactMatches" checked onchange="onFilterChange()" />
@@ -1962,20 +2036,52 @@ function rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold) {
   });
 }
 
+// Whether a clean match (a 'both' row already known to have no effective
+// diff — see rowHasEffectiveDiff) is a genuinely EXACT match, or one that
+// only counts as matching thanks to a leniency setting:
+//  - a date field recognized as equivalent despite different wording (e.g.
+//    "12 Nov 1900" vs "12 November 1900", or two approximate dates within
+//    the flat tolerance) — same is true, but the raw text differs;
+//  - a place field that doesn't match its text exactly but is being waved
+//    through by "treat similar locations as matching" (ignoreSimilarLocations
+//    on, similarity at or above the threshold).
+// Only meaningful once a row is already confirmed to have no effective
+// diff; callers should not call this for a row that still has one.
+function matchExactness(row, ignoreSimilarLocations, locationThreshold) {
+  if (!row.fieldDiffs) return 'exact';
+  for (const f of row.fieldDiffs) {
+    if (f.same) {
+      const rawA = normVal(f.a), rawB = normVal(f.b);
+      if (f.type === 'date' && rawA && rawB && rawA.toLowerCase() !== rawB.toLowerCase()) {
+        return 'similar';
+      }
+    } else if (f.type === 'place' && ignoreSimilarLocations && f.similarity >= locationThreshold) {
+      return 'similar';
+    }
+  }
+  return 'exact';
+}
+
 // The colour of an ancestor section's header, computed over EVERY row in
 // that section (ancestor, siblings, spouses, descendants, ...) — not just the
 // ancestor's own row — so the header is a genuine "does anything under here
 // need attention" signal. Ranked worst to best:
-//  - red:    at least one row is a matched pair flagged as substantially
-//            different (see isSubstantiallyDifferent) — red is reserved
-//            exclusively for this; a missing person is never red.
-//  - purple: otherwise, at least one row is missing from a file (either
-//            file — colour no longer distinguishes which one).
-//  - amber:  otherwise, at least one row is an unverified "maybe" match, or a
-//            matched pair with a real (non-substantial) recorded difference —
-//            one that isn't excused by "treat similar locations as matching".
-//  - green:  everything else — every row is either a clean match or has been
-//            excused by the person's own settings or judgement.
+//  - red:     at least one row is a matched pair flagged as substantially
+//             different (see isSubstantiallyDifferent) — a brighter red,
+//             reserved exclusively for this.
+//  - missing: otherwise, at least one row is missing from a file (either
+//             file — colour no longer distinguishes which one) — a deeper,
+//             darker red than "red" above, so the two stay visually
+//             distinct despite both now being in the red family.
+//  - amber:   otherwise, at least one row is an unverified "maybe" match, or
+//             a matched pair with a real (non-substantial) recorded
+//             difference — one that isn't excused by "treat similar
+//             locations as matching".
+//  - similar: otherwise, at least one clean match is only a match thanks to
+//             a leniency setting (see matchExactness()) — a lighter green.
+//  - exact:   everything else — every row is either a genuinely exact match
+//             or has been excused by the person's own settings or
+//             judgement. A deeper green than "similar".
 // A row is skipped entirely (never counted toward any of the above) when:
 //  - it's been individually marked "Reviewed" — the person has looked at it
 //    and dealt with it, regardless of what the "hide reviewed" filter shows;
@@ -1984,13 +2090,11 @@ function rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold) {
 // These mirror the same settings used to decide what's shown in the report,
 // so the header colour and the report body never disagree about what counts
 // as resolved.
-// Severity ranking for a section's overall status — red (a confirmed
-// substantial difference) outranks purple (something missing), which
-// outranks amber (an unresolved/minor difference), which outranks green.
-const SECTION_STATUS_RANK = { green: 0, amber: 1, purple: 2, red: 3 };
+// Severity ranking for a section's overall status, worst to best.
+const SECTION_STATUS_RANK = { exact: 0, similar: 1, amber: 2, missing: 3, red: 4 };
 
 function computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold) {
-  let status = 'green';
+  let status = 'exact';
   function upgrade(candidate) {
     if (SECTION_STATUS_RANK[candidate] > SECTION_STATUS_RANK[status]) status = candidate;
   }
@@ -1998,9 +2102,9 @@ function computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirt
     if (reviewedIds.has(personKey(row))) continue;
     if (row.status === 'missA' || row.status === 'missB') {
       if (ignoreLikelyAlive && isLikelyAlive(row, aliveYears)) continue;
-      // Missing from either file is purple, never red — red is reserved
-      // exclusively for a matched pair flagged as substantially different.
-      upgrade('purple');
+      // Missing from either file gets its own deep-red "missing" status,
+      // distinct from the brighter red reserved for a substantial difference.
+      upgrade('missing');
       continue;
     }
     // status is 'both' or 'maybe'
@@ -2008,7 +2112,9 @@ function computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirt
     if (row.substantiallyDifferent) { upgrade('red'); continue; }
     if (row.status === 'maybe' || rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold)) {
       upgrade('amber');
+      continue;
     }
+    upgrade(matchExactness(row, ignoreSimilarLocations, locationThreshold));
   }
   return status;
 }
@@ -2016,12 +2122,19 @@ function computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirt
 // A substantially-different match (see isSubstantiallyDifferent) gets a red
 // "Substantial difference" badge in place of the usual green "In both" /
 // amber "verify" badge — the point is to flag it as worth a closer look, not
-// to also claim it's a confident, unremarkable match.
-function statusBadge(status, substantiallyDifferent) {
+// to also claim it's a confident, unremarkable match. A clean match's own
+// badge is further split into "Exact match" (deeper green) and "In both"
+// (the original lighter green, for a match only achieved via a leniency
+// setting — see matchExactness()); exactness is null for anything else
+// (missing, maybe, substantially different), where it plays no part.
+function statusBadge(status, substantiallyDifferent, exactness) {
   if ((status === 'both' || status === 'maybe') && substantiallyDifferent) {
     return '<span class="badge substantial-diff">⚠ Substantial difference</span>';
   }
-  if (status === 'both') return '<span class="badge both">In both</span>';
+  if (status === 'both') {
+    if (exactness === 'exact') return '<span class="badge exact">Exact match</span>';
+    return '<span class="badge both">In both</span>';
+  }
   if (status === 'missA') return '<span class="badge missA">Missing in File A</span>';
   if (status === 'missB') return '<span class="badge missB">Missing in File B</span>';
   if (status === 'maybe') return '<span class="badge maybe">Possible match — verify</span>';
@@ -2224,7 +2337,12 @@ function renderReport() {
   document.getElementById('aliveYearsVal').textContent = aliveYears;
   document.getElementById('locationThresholdVal').textContent = locationThresholdPct + '%';
 
-  let totalCompared = 0, totalWithDiffs = 0, totalMissingA = 0, totalMissingB = 0;
+  // Five mutually-exclusive counters, one per status colour — together they
+  // ARE the legend now, so the summary boxes can replace it outright instead
+  // of duplicating it. Mirrors computeSectionStatus's per-row classification
+  // exactly, just tallied instead of ranked.
+  let totalExact = 0, totalSimilar = 0, totalNeedsVerification = 0, totalSubstantialDiffs = 0;
+  let totalMissingA = 0, totalMissingB = 0;
   let hiddenExact = 0, hiddenAlive = 0, hiddenReviewed = 0, hiddenNoBirthDate = 0, hiddenNotSignificant = 0;
 
   // Evaluate a single row against every filter exactly once. This is shared
@@ -2243,11 +2361,12 @@ function renderReport() {
     // is excluded entirely when this option is on — applies regardless of status.
     if (hideNoBirthDate && !normVal(row.birthDate)) { hiddenNoBirthDate++; return null; }
     const likelyAlive = ignoreLikelyAlive && isLikelyAlive(row, aliveYears);
-    // "Needs attention" here means the same thing a red or purple section
-    // header means (see computeSectionStatus): a non-excused missing person
-    // (purple), or a matched pair flagged as substantially different (red).
-    // An unverified "maybe" match or an ordinary recorded difference is
-    // amber, not red or purple, so it doesn't qualify.
+    // "Needs attention" here means the same thing a red or deep-red/"missing"
+    // section header means (see computeSectionStatus): a non-excused missing
+    // person (the deep-red "missing" status), or a matched pair flagged as
+    // substantially different (the brighter red). An unverified "maybe"
+    // match or an ordinary recorded difference is amber, not either red, so
+    // it doesn't qualify.
     let isSignificant;
     if (row.status === 'missA' || row.status === 'missB') {
       // "Ignore all people likely still alive" removes missing-person rows for them.
@@ -2258,8 +2377,17 @@ function renderReport() {
       // status is 'both' or 'maybe'
       if (onlyShowMissing) return null;
       const hasDiff = rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold);
-      totalCompared++;
-      if (hasDiff) totalWithDiffs++;
+      // Exactly one of these three buckets, matching computeSectionStatus's
+      // own red > amber > similar/exact precedence for a single row.
+      if (row.substantiallyDifferent) {
+        totalSubstantialDiffs++;
+      } else if (row.status === 'maybe' || hasDiff) {
+        totalNeedsVerification++;
+      } else if (matchExactness(row, ignoreSimilarLocations, locationThreshold) === 'exact') {
+        totalExact++;
+      } else {
+        totalSimilar++;
+      }
       // It also removes matched rows with mismatched data for a likely-living person.
       // Exact matches for likely-living people are unaffected by this option — those
       // are controlled separately by "Hide exact matches".
@@ -2314,10 +2442,11 @@ function renderReport() {
   let html = '';
 
   html += `<div class="summary">
-    <div class="card matches"><div class="num">${totalCompared}</div><div class="lbl">Individuals matched &amp; compared</div></div>
-    <div class="card diffs"><div class="num">${totalWithDiffs}</div><div class="lbl">Matched with attribute differences</div></div>
-    <div class="card missA"><div class="num">${totalMissingA}</div><div class="lbl">Missing from File A shown</div></div>
-    <div class="card missB"><div class="num">${totalMissingB}</div><div class="lbl">Missing from File B shown</div></div>
+    <div class="card exact"><div class="num">${totalExact}</div><div class="lbl">Exact match</div></div>
+    <div class="card similar"><div class="num">${totalSimilar}</div><div class="lbl">In both, similar match</div></div>
+    <div class="card diffs"><div class="num">${totalNeedsVerification}</div><div class="lbl">Possible match / needs verification</div></div>
+    <div class="card substantial"><div class="num">${totalSubstantialDiffs}</div><div class="lbl">Substantial difference</div></div>
+    <div class="card missing"><div class="num">${totalMissingA + totalMissingB}</div><div class="lbl">Missing from either file</div><div class="sublbl">File A: ${totalMissingA} · File B: ${totalMissingB}</div></div>
   </div>`;
 
   if (hideExactMatches || ignoreLikelyAlive || hideNoBirthDate || hiddenReviewed > 0 || onlySignificant) {
@@ -2329,13 +2458,6 @@ function renderReport() {
     if (onlySignificant) bits.push(`${hiddenNotSignificant} without a significant difference hidden`);
     html += `<div class="legend">${bits.join(' · ')}</div>`;
   }
-
-  html += `<div class="legend">
-    <span><span class="dot" style="background:var(--accent-soft)"></span>In both files</span>
-    <span><span class="dot" style="background:var(--missing-soft)"></span>Missing from either file</span>
-    <span><span class="dot" style="background:var(--warn-soft)"></span>Possible match / needs verification</span>
-    <span><span class="dot" style="background:var(--sig-diff-soft)"></span>Substantial difference</span>
-  </div>`;
 
   if (!displaySections.length) {
     html += `<div class="section"><div style="padding:20px;color:var(--muted);font-size:13px;">Nothing to show with the current filters — try unchecking one above.</div></div>`;
@@ -2370,6 +2492,11 @@ function renderReport() {
     for (const row of section.rows) {
       const isReviewed = reviewedIds.has(personKey(row));
       const yearsSuffix = matchYearsSuffix(row);
+      // Only a clean 'both' match (no substantial difference, no effective
+      // diff) has a meaningful exactness to show on its badge.
+      const exactness = (row.status === 'both' && !row.substantiallyDifferent && !rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold))
+        ? matchExactness(row, ignoreSimilarLocations, locationThreshold)
+        : null;
       // Flat mode has no bordered match-card beneath the header — just the
       // attributes, laid directly under it — since the header IS this row.
       const bodyClasses = [section.flat ? 'section-body' : 'match-card'];
@@ -2379,7 +2506,7 @@ function renderReport() {
         <div class="match-card-topline">
           <div class="match-card-topline-left">
             <span class="role-tag">${esc(row.role)}</span>
-            ${statusBadge(row.status, row.substantiallyDifferent)}
+            ${statusBadge(row.status, row.substantiallyDifferent, exactness)}
           </div>
           <label class="reviewed-inline">
             <input type="checkbox" ${isReviewed ? 'checked' : ''} onchange="toggleReviewed('${personKey(row).replace(/'/g, "\\'")}', this.checked)" />
