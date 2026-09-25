@@ -257,6 +257,25 @@ v37 - Recoloured "missing from either file" from purple to a deep, dark
       "purple" rendering red. The "Only show items needing attention"
       checkbox's label was reworded from "(red or purple)" to "(missing
       or significantly different)" for the same reason.
+
+v38 - Removed the three standalone report-control checkboxes "Hide exact
+      matches", "Hide all matches / show only missing people", and "Only
+      show items needing attention (missing or significantly different)".
+      In their place, each of the 5 summary cards (Exact match, In both/
+      similar match, Possible match/needs verification, Substantial
+      difference, Missing from either file) now has its own tickbox right
+      on the card: unticking it hides that category's rows from the report
+      below, same as the removed checkboxes did, but per-category instead
+      of as three overlapping, harder-to-reason-about combinations. A
+      category's own card total is unaffected by its tickbox, exactly like
+      "Hide exact matches" before it — only what's displayed changes, never
+      the count. Since these tickboxes are rendered fresh as part of the
+      report's own innerHTML on every re-render (unlike the removed
+      checkboxes, which lived in reportControls outside #report and so
+      persisted in the DOM across renders), their state is now tracked in a
+      new `categoryVisibility` object instead of being read back off the
+      DOM. Defaults match the old behaviour: exact matches start hidden,
+      everything else starts shown.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -391,6 +410,13 @@ v37 - Recoloured "missing from either file" from purple to a deep, dark
   .summary .sublbl { font-size: 11px; color: var(--muted); margin-top: 2px; }
   .summary .num { font-size: 22px; font-weight: 600; }
   .summary .lbl { font-size: 12px; color: var(--muted); }
+  /* Each summary card's label is now also a checkbox: unticking it hides that
+     status category's rows from the report below (see categoryVisibility /
+     onCategoryToggle), replacing the old standalone "Hide exact matches" /
+     "only show missing" / "only show significant" checkboxes with five
+     independent, self-explaining per-category toggles instead. */
+  .summary .card-toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
+  .summary .card-toggle input[type="checkbox"] { cursor: pointer; margin: 0; }
   .section {
     background: var(--card);
     border: 1px solid var(--line);
@@ -651,18 +677,6 @@ v37 - Recoloured "missing from either file" from purple to a deep, dark
         <option value="both" selected>Both sides</option>
         <option value="mother">Mother's side</option>
       </select>
-    </div>
-    <div>
-      <input type="checkbox" id="onlyShowMissing" onchange="onOnlyShowMissingChange()" />
-      <label for="onlyShowMissing">Hide all matches / show only missing people</label>
-    </div>
-    <div>
-      <input type="checkbox" id="onlySignificant" onchange="onOnlySignificantChange()" />
-      <label for="onlySignificant">Only show items needing attention (missing or significantly different)</label>
-    </div>
-    <div>
-      <input type="checkbox" id="hideExactMatches" checked onchange="onFilterChange()" />
-      <label for="hideExactMatches">Hide exact matches</label>
     </div>
     <div>
       <input type="checkbox" id="ignoreLikelyAlive" checked onchange="onFilterChange()" />
@@ -2161,7 +2175,7 @@ let hasScrolledToReport = false;
 // they're persisted to localStorage under a key fingerprinting exactly
 // these two files (reviewStorageKey, set in maybeShowRootPanel), and reloaded
 // every time runCompare() runs. This state is intentionally independent of
-// the other filters (hide exact matches / hide likely-alive / similar
+// the other filters (per-category visibility / hide likely-alive / similar
 // locations) — once reviewed, a row is simply done, and is excluded before
 // any other filter logic runs.
 let reviewedIds = new Set();
@@ -2276,27 +2290,39 @@ function onGroupByAncestorChange() {
   renderReport();
 }
 
-// "Hide exact matches" is moot whenever either of these narrower filters is
-// on — both already exclude everything an exact match would leave behind —
-// so it's disabled (greyed out) rather than left showing a stale checked
-// state that isn't actually doing anything.
-function updateHideExactMatchesDisabled() {
-  const onlyShowMissing = document.getElementById('onlyShowMissing').checked;
-  const onlySignificant = document.getElementById('onlySignificant').checked;
-  document.getElementById('hideExactMatches').disabled = onlyShowMissing || onlySignificant;
-}
-
-function onOnlyShowMissingChange() {
-  updateHideExactMatchesDisabled();
-  renderReport();
-}
-
-function onOnlySignificantChange() {
-  updateHideExactMatchesDisabled();
-  renderReport();
-}
-
 function onFilterChange() {
+  renderReport();
+}
+
+// Per-category show/hide state for the five summary cards (exact, similar,
+// diffs/needs-verification, substantial, missing), replacing the old
+// standalone "Hide exact matches" / "Hide all matches, show only missing" /
+// "Only show items needing attention" checkboxes with one independent
+// tickbox per status colour, right on its own summary card. Unlike the
+// filter checkboxes above (which live in reportControls, outside #report,
+// so they survive a re-render untouched), these checkboxes are rendered
+// fresh as part of the report's own innerHTML on every renderReport() call —
+// so their checked state can't be read back off the DOM the way the other
+// filters are; it has to be tracked here instead, the same way
+// collapsedSections/reviewedIds track state that outlives a single render.
+// A category being hidden never changes its own card's count (see
+// evaluateRow/renderReport below) — exactly like "Hide exact matches"
+// before it, this only changes what's displayed underneath.
+let categoryVisibility = { exact: false, similar: true, diffs: true, substantial: true, missing: true };
+
+// Human-readable singular/plural nouns for the "N hidden" legend line built
+// in renderReport() — mirrors the existing "likely-living person/people"
+// pattern used for the other hidden-count messages.
+const CATEGORY_LABELS = {
+  exact: { singular: 'exact match', plural: 'exact matches' },
+  similar: { singular: 'similar match', plural: 'similar matches' },
+  diffs: { singular: 'item needing verification', plural: 'items needing verification' },
+  substantial: { singular: 'substantial difference', plural: 'substantial differences' },
+  missing: { singular: 'missing entry', plural: 'missing entries' }
+};
+
+function onCategoryToggle(category, checked) {
+  categoryVisibility[category] = checked;
   renderReport();
 }
 
@@ -2324,9 +2350,6 @@ function renderReport() {
 
   const groupByAncestor = document.getElementById('groupByAncestor').checked;
   const sideFilter = document.getElementById('sideFilter').value;
-  const onlyShowMissing = document.getElementById('onlyShowMissing').checked;
-  const onlySignificant = document.getElementById('onlySignificant').checked;
-  const hideExactMatches = document.getElementById('hideExactMatches').checked;
   const hideReviewedItems = document.getElementById('hideReviewedItems').checked;
   const ignoreLikelyAlive = document.getElementById('ignoreLikelyAlive').checked;
   const hideNoBirthDate = document.getElementById('hideNoBirthDate').checked;
@@ -2343,7 +2366,12 @@ function renderReport() {
   // exactly, just tallied instead of ranked.
   let totalExact = 0, totalSimilar = 0, totalNeedsVerification = 0, totalSubstantialDiffs = 0;
   let totalMissingA = 0, totalMissingB = 0;
-  let hiddenExact = 0, hiddenAlive = 0, hiddenReviewed = 0, hiddenNoBirthDate = 0, hiddenNotSignificant = 0;
+  let hiddenAlive = 0, hiddenReviewed = 0, hiddenNoBirthDate = 0;
+  // One hidden-count per summary-card category, incremented only when that
+  // category's own tickbox is unchecked — this is what replaces the old
+  // "Hide exact matches" / "only show missing" / "only show significant"
+  // checkboxes' hidden-count bookkeeping.
+  const hiddenByCategory = { exact: 0, similar: 0, diffs: 0, substantial: 0, missing: 0 };
 
   // Evaluate a single row against every filter exactly once. This is shared
   // between the two display modes below so switching "Group results by
@@ -2361,41 +2389,37 @@ function renderReport() {
     // is excluded entirely when this option is on — applies regardless of status.
     if (hideNoBirthDate && !normVal(row.birthDate)) { hiddenNoBirthDate++; return null; }
     const likelyAlive = ignoreLikelyAlive && isLikelyAlive(row, aliveYears);
-    // "Needs attention" here means the same thing a red or deep-red/"missing"
-    // section header means (see computeSectionStatus): a non-excused missing
-    // person (the deep-red "missing" status), or a matched pair flagged as
-    // substantially different (the brighter red). An unverified "maybe"
-    // match or an ordinary recorded difference is amber, not either red, so
-    // it doesn't qualify.
-    let isSignificant;
+    // Which of the five summary-card categories this row belongs to — always
+    // computed (and its card's total always incremented) regardless of
+    // whether that category is currently shown, exactly like "Hide exact
+    // matches" used to: a category's tickbox only changes what's displayed
+    // below, never the number on its own card.
+    let category;
     if (row.status === 'missA' || row.status === 'missB') {
       // "Ignore all people likely still alive" removes missing-person rows for them.
       if (likelyAlive) { hiddenAlive++; return null; }
       if (row.status === 'missA') totalMissingA++; else totalMissingB++;
-      isSignificant = true;
+      category = 'missing';
     } else {
       // status is 'both' or 'maybe'
-      if (onlyShowMissing) return null;
       const hasDiff = rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold);
-      // Exactly one of these three buckets, matching computeSectionStatus's
+      // Exactly one of these four buckets, matching computeSectionStatus's
       // own red > amber > similar/exact precedence for a single row.
       if (row.substantiallyDifferent) {
-        totalSubstantialDiffs++;
+        category = 'substantial'; totalSubstantialDiffs++;
       } else if (row.status === 'maybe' || hasDiff) {
-        totalNeedsVerification++;
+        category = 'diffs'; totalNeedsVerification++;
       } else if (matchExactness(row, ignoreSimilarLocations, locationThreshold) === 'exact') {
-        totalExact++;
+        category = 'exact'; totalExact++;
       } else {
-        totalSimilar++;
+        category = 'similar'; totalSimilar++;
       }
       // It also removes matched rows with mismatched data for a likely-living person.
       // Exact matches for likely-living people are unaffected by this option — those
-      // are controlled separately by "Hide exact matches".
+      // are controlled separately by the "Exact match" card's own tickbox.
       if (likelyAlive && hasDiff) { hiddenAlive++; return null; }
-      if (hideExactMatches && !hasDiff) { hiddenExact++; return null; }
-      isSignificant = !!row.substantiallyDifferent;
     }
-    if (onlySignificant && !isSignificant) { hiddenNotSignificant++; return null; }
+    if (!categoryVisibility[category]) { hiddenByCategory[category]++; return null; }
     return row;
   }
 
@@ -2441,21 +2465,32 @@ function renderReport() {
 
   let html = '';
 
+  // Each card's own tickbox — checked means "show this category's rows
+  // below" — replaces the old standalone hide/only-show checkboxes.
+  function cardToggle(category) {
+    return `<input type="checkbox" ${categoryVisibility[category] ? 'checked' : ''} onchange="onCategoryToggle('${category}', this.checked)" />`;
+  }
+
   html += `<div class="summary">
-    <div class="card exact"><div class="num">${totalExact}</div><div class="lbl">Exact match</div></div>
-    <div class="card similar"><div class="num">${totalSimilar}</div><div class="lbl">In both, similar match</div></div>
-    <div class="card diffs"><div class="num">${totalNeedsVerification}</div><div class="lbl">Possible match / needs verification</div></div>
-    <div class="card substantial"><div class="num">${totalSubstantialDiffs}</div><div class="lbl">Substantial difference</div></div>
-    <div class="card missing"><div class="num">${totalMissingA + totalMissingB}</div><div class="lbl">Missing from either file</div><div class="sublbl">File A: ${totalMissingA} · File B: ${totalMissingB}</div></div>
+    <div class="card exact"><div class="num">${totalExact}</div><label class="lbl card-toggle">${cardToggle('exact')} Exact match</label></div>
+    <div class="card similar"><div class="num">${totalSimilar}</div><label class="lbl card-toggle">${cardToggle('similar')} In both, similar match</label></div>
+    <div class="card diffs"><div class="num">${totalNeedsVerification}</div><label class="lbl card-toggle">${cardToggle('diffs')} Possible match / needs verification</label></div>
+    <div class="card substantial"><div class="num">${totalSubstantialDiffs}</div><label class="lbl card-toggle">${cardToggle('substantial')} Substantial difference</label></div>
+    <div class="card missing"><div class="num">${totalMissingA + totalMissingB}</div><label class="lbl card-toggle">${cardToggle('missing')} Missing from either file</label><div class="sublbl">File A: ${totalMissingA} · File B: ${totalMissingB}</div></div>
   </div>`;
 
-  if (hideExactMatches || ignoreLikelyAlive || hideNoBirthDate || hiddenReviewed > 0 || onlySignificant) {
+  const anyCategoryHidden = Object.values(categoryVisibility).some(v => !v);
+  if (anyCategoryHidden || ignoreLikelyAlive || hideNoBirthDate || hiddenReviewed > 0) {
     const bits = [];
-    if (hideExactMatches) bits.push(`${hiddenExact} exact match${hiddenExact === 1 ? '' : 'es'} hidden`);
+    for (const category of ['exact', 'similar', 'diffs', 'substantial', 'missing']) {
+      if (categoryVisibility[category]) continue;
+      const n = hiddenByCategory[category];
+      const { singular, plural } = CATEGORY_LABELS[category];
+      bits.push(`${n} ${n === 1 ? singular : plural} hidden`);
+    }
     if (ignoreLikelyAlive) bits.push(`${hiddenAlive} likely-living ${hiddenAlive === 1 ? 'person' : 'people'} hidden`);
     if (hideNoBirthDate) bits.push(`${hiddenNoBirthDate} with no birth date hidden`);
     if (hiddenReviewed > 0) bits.push(`${hiddenReviewed} reviewed ${hiddenReviewed === 1 ? 'item' : 'items'} hidden`);
-    if (onlySignificant) bits.push(`${hiddenNotSignificant} without a significant difference hidden`);
     html += `<div class="legend">${bits.join(' · ')}</div>`;
   }
 

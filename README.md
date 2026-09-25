@@ -18,17 +18,14 @@ Matches are then shown with options to hide/show details as required based on yo
 
 ###### In Progress
 
-* missing = PURPLE - check colours are correct
-* 5 box summary
+* N/A
 
 
 
 ###### Not Started
 
-* Check nearest logic really is closest - currently grandchild?
-* Make exact matches darker green than similar matches
-* Ensure everything is categorised as one of - exact/similar/different/sig diff/missing
-* Slider selection for the 5 levels
+* hide anonymous
+* Check nearest wikitree button logic really is closest - currently grandchild?
 * Amend remaining hide/show options into "similarity" (location), "ignore" (no dob, likely alive, reviewed), "ui" (group, collapse)
 * Check after/before/about logic and tolerance
 * Find a way to add a link to ancestry pages (probably not possible)
