@@ -276,6 +276,39 @@ v38 - Removed the three standalone report-control checkboxes "Hide exact
       new `categoryVisibility` object instead of being read back off the
       DOM. Defaults match the old behaviour: exact matches start hidden,
       everything else starts shown.
+
+v39 - Split the report-controls panel in two: "3. Similarity settings" (how
+      lenient matching is) and "4. Display settings" (everything about what's
+      shown/hidden/grouped, previously numbered "3"). "Hide matches with
+      similar locations" (a checkbox plus a separate threshold slider) is now
+      a single "Location tolerance" slider — 0% behaves exactly like the old
+      checkbox unchecked, any value above 0% is the checkbox checked with
+      that value as the threshold (the "0 = off" convention already used
+      elsewhere in the app) — and, like the setting it replaces, still
+      applies live to an already-generated report. Added two new settings
+      alongside it: "Name tolerance" (an adjustable edit-distance threshold
+      for the spelling-drift check already used by the "substantially
+      different" red flag — previously a fixed 2 characters) and "Date
+      tolerance" (an adjustable day-window for the approximate-date matching
+      already used when comparing birth/death/marriage dates — previously a
+      fixed 91 days/~3 months; an EXACT full day/month/year date on either
+      side still always requires a same-day match regardless of this
+      setting, per v4). Unlike Location tolerance, these two are read once
+      when "Compare trees" is clicked and apply to that comparison, the same
+      way maxGen/includeSiblings/etc. already do — changing the slider
+      afterward takes effect on the next comparison, not the current report.
+
+v40 - Made "Date tolerance" live, same as Location tolerance: every date-type
+      field (Birth date, Death date, Marriage date) is now reclassified by
+      re-running datesMatch() against the field's own raw text on every
+      render, using whatever the slider currently says, instead of the
+      day-window being baked in once at "Compare trees" time. Dragging the
+      slider now immediately changes which dates count as matching in an
+      already-generated report, the same way Location tolerance already did.
+      Name tolerance is unchanged and still only takes effect on the next
+      comparison (see v39) — the "substantially different" flag it feeds is
+      baked onto each row and directly unit-tested that way, unlike the
+      per-field date comparisons this change touches.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -570,6 +603,7 @@ v38 - Removed the three standalone report-control checkboxes "Hide exact
     padding: 12px 16px;
   }
   .report-controls > div { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .report-controls > div.opts-stack-line-wrap { align-items: flex-start; width: 100%; }
   .report-controls label { font-size: 13px; cursor: pointer; }
   .side-select { width: auto; margin-top: 0; margin-left: 6px; display: inline-block; padding: 5px 8px; }
   .link-button {
@@ -660,8 +694,36 @@ v38 - Removed the three standalone report-control checkboxes "Hide exact
     <button class="primary" id="compareBtn" onclick="runCompare()">Compare trees</button>
   </div>
 
+  <div class="report-controls" id="reportControlsSimilarity" style="display:none;">
+    <h2 style="flex-basis:100%;margin:0 0 4px;font-size:15px;">3. Similarity settings</h2>
+    <div class="opts-stack-line opts-stack-line-wrap">
+      <div class="opts-line">
+        <label for="locationTolerance">Location tolerance:</label>
+        <input type="range" id="locationTolerance" min="0" max="100" step="10" value="50" oninput="onFilterChange()" />
+        <span id="locationToleranceVal">50%</span>
+      </div>
+      <div class="hint">Two recorded places are treated as a match once they're at least this similar (0% = only an exact match counts; 100% = almost any two places count). Lets a full "Torgau, Germany" match a bare "Germany", for example. Applies live.</div>
+    </div>
+    <div class="opts-stack-line opts-stack-line-wrap">
+      <div class="opts-line">
+        <label for="nameTolerance">Name tolerance:</label>
+        <input type="range" id="nameTolerance" min="0" max="6" step="1" value="2" oninput="document.getElementById('nameToleranceVal').textContent=this.value" />
+        <span id="nameToleranceVal">2</span>
+      </div>
+      <div class="hint">How many letters of spelling drift between two names (e.g. Catherine/Katherine) still count as the same name before a mismatch is flagged as substantially different. Applies next time you click "Compare trees".</div>
+    </div>
+    <div class="opts-stack-line opts-stack-line-wrap">
+      <div class="opts-line">
+        <label for="dateTolerance">Date tolerance:</label>
+        <input type="range" id="dateTolerance" min="0" max="365" step="7" value="91" oninput="onFilterChange()" />
+        <span id="dateToleranceVal">91</span> days
+      </div>
+      <div class="hint">How many days apart two approximate (About/Year-only) dates can be and still count as the same event. A precise, full day/month/year date on either side always requires a same-day match regardless of this setting. Applies live.</div>
+    </div>
+  </div>
+
   <div class="report-controls" id="reportControls" style="display:none;">
-    <h2 style="flex-basis:100%;margin:0 0 4px;font-size:15px;">3. Select entries to hide/show</h2>
+    <h2 style="flex-basis:100%;margin:0 0 4px;font-size:15px;">4. Display settings</h2>
     <div>
       <input type="checkbox" id="groupByAncestor" checked onchange="onGroupByAncestorChange()" />
       <label for="groupByAncestor">Group results by ancestor</label>
@@ -690,15 +752,6 @@ v38 - Removed the three standalone report-control checkboxes "Hide exact
     <div>
       <input type="checkbox" id="hideNoBirthDate" onchange="onFilterChange()" />
       <label for="hideNoBirthDate">Hide people with no date of birth</label>
-    </div>
-    <div>
-      <input type="checkbox" id="ignoreSimilarLocations" checked onchange="onFilterChange()" />
-      <label for="ignoreSimilarLocations">Hide matches with similar locations</label>
-      <span class="slider-wrap">
-        (similarity ≥
-        <input type="range" id="locationThreshold" min="0" max="100" step="10" value="50" oninput="onFilterChange()" />
-        <span id="locationThresholdVal">50%</span>)
-      </span>
     </div>
     <div>
       <input type="checkbox" id="hideReviewedItems" checked onchange="onFilterChange()" />
@@ -1522,30 +1575,36 @@ function levenshteinDistance(a, b) {
 }
 
 // Two non-empty, already-normalized strings count as "just a spelling variant"
-// when they're identical or within a couple of characters (edit distance <= 2)
-// of each other. Blank vs. non-blank is never a spelling variant — that's
-// missing data, handled by the caller.
-function isMinorSpellingVariant(a, b) {
+// when they're identical or within maxDistance characters (edit distance) of
+// each other — maxDistance defaults to 2 (the original hardcoded value) when
+// omitted, and is otherwise the live "Name tolerance" setting. Blank vs.
+// non-blank is never a spelling variant — that's missing data, handled by
+// the caller.
+function isMinorSpellingVariant(a, b, maxDistance) {
   if (!a || !b) return false;
   if (a === b) return true;
-  return levenshteinDistance(a, b) <= 2;
+  const threshold = typeof maxDistance === 'number' ? maxDistance : 2;
+  return levenshteinDistance(a, b) <= threshold;
 }
 
 // name: {given, surname, full} as produced by parseNameValue/extractIndividual.
 // Compares surname and primary (first) given-name token independently, since
 // GEDCOM stores any middle names as extra words within the given-name field —
 // an extra, missing, or reordered middle name never trips this on its own.
-function nameSubstantiallyDifferent(nameA, nameB) {
+// nameTolerance is the "Name tolerance" setting's edit-distance threshold
+// (see isMinorSpellingVariant); omitted/undefined preserves the original
+// fixed threshold of 2.
+function nameSubstantiallyDifferent(nameA, nameB, nameTolerance) {
   const surnameA = normalizeName(nameA.surname);
   const surnameB = normalizeName(nameB.surname);
-  if (surnameA && surnameB && surnameA !== surnameB && !isMinorSpellingVariant(surnameA, surnameB)) {
+  if (surnameA && surnameB && surnameA !== surnameB && !isMinorSpellingVariant(surnameA, surnameB, nameTolerance)) {
     return true;
   }
   const givenTokensA = normalizeName(nameA.given).split(' ').filter(Boolean);
   const givenTokensB = normalizeName(nameB.given).split(' ').filter(Boolean);
   const firstA = givenTokensA[0] || '';
   const firstB = givenTokensB[0] || '';
-  if (firstA && firstB && firstA !== firstB && !isMinorSpellingVariant(firstA, firstB)) {
+  if (firstA && firstB && firstA !== firstB && !isMinorSpellingVariant(firstA, firstB, nameTolerance)) {
     return true;
   }
   return false;
@@ -1587,9 +1646,9 @@ function birthSubstantiallyDifferent(indA, indB) {
   return false;
 }
 
-function isSubstantiallyDifferent(indA, indB) {
+function isSubstantiallyDifferent(indA, indB, nameTolerance) {
   if (!indA || !indB) return false;
-  return nameSubstantiallyDifferent(indA.name, indB.name) || birthSubstantiallyDifferent(indA, indB);
+  return nameSubstantiallyDifferent(indA.name, indB.name, nameTolerance) || birthSubstantiallyDifferent(indA, indB);
 }
 
 // ---------- Genealogy date comparison ----------
@@ -1653,10 +1712,13 @@ function dateMidpointDays(p) {
 //    restrictive known date rather than treated as interchangeable with a different one, or
 //  - exactly one is Bef/Aft-qualified -> never a match (precision isn't comparable), or
 //  - otherwise, a precise (EXACT: full day/month/year) date on either side gets NO tolerance —
-//    it must line up to the day. The flat 3-month (91 day) tolerance only kicks in when BOTH
-//    sides are approximate (About/Year), since fuzzy-vs-fuzzy is where "close enough" makes sense;
-//    a precise date is a firm claim and should never be waved through as "probably the same".
-function datesMatch(rawA, rawB) {
+//    it must line up to the day, regardless of the tolerance setting. The flat day-window
+//    tolerance only kicks in when BOTH sides are approximate (About/Year), since fuzzy-vs-fuzzy
+//    is where "close enough" makes sense; a precise date is a firm claim and should never be
+//    waved through as "probably the same". toleranceDays is the live "Date tolerance" setting
+//    (in days); omitted/undefined preserves the original fixed window of 91 days (~3 months).
+function datesMatch(rawA, rawB, toleranceDays) {
+  const tolerance91Default = typeof toleranceDays === 'number' ? toleranceDays : 91;
   const a = normVal(rawA), b = normVal(rawB);
   if (!a && !b) return true;
   if (!a || !b) return false;
@@ -1670,11 +1732,14 @@ function datesMatch(rawA, rawB) {
   }
   if (aIsBefAft !== bIsBefAft) return false;
   const eitherExact = pa.tier === 'EXACT' || pb.tier === 'EXACT';
-  const tolerance = eitherExact ? 0 : 91;
+  const tolerance = eitherExact ? 0 : tolerance91Default;
   return Math.abs(dateMidpointDays(pa) - dateMidpointDays(pb)) <= tolerance;
 }
 
-function compareIndividuals(indA, indB) {
+// dateToleranceDays threads through to datesMatch() for the two date-type
+// fields (Birth date, Death date); omitted/undefined preserves the original
+// fixed 91-day window (see datesMatch).
+function compareIndividuals(indA, indB, dateToleranceDays) {
   const fields = [
     ['Name', indA.name.full, indB.name.full, 'text'],
     ['Birth date', indA.birth.date, indB.birth.date, 'date'],
@@ -1683,7 +1748,7 @@ function compareIndividuals(indA, indB) {
     ['Death place', indA.death.place, indB.death.place, 'place']
   ];
   return fields.map(([label, a, b, type]) => {
-    const same = type === 'date' ? datesMatch(a, b) : fieldsEqual(a, b);
+    const same = type === 'date' ? datesMatch(a, b, dateToleranceDays) : fieldsEqual(a, b);
     const similarity = type === 'place' ? placeSimilarity(a, b) : (same ? 1 : 0);
     return { label, a, b, same, type, similarity };
   });
@@ -1723,8 +1788,9 @@ function renderLinks(links, nearestWikiTreeUrl) {
   return `<div class="match-links">${items.join('')}</div>`;
 }
 
-function renderValueCell(f, ignoreSimilarLocations, locationThreshold) {
-  const { a, b, same, type, similarity } = f;
+function renderValueCell(f, ignoreSimilarLocations, locationThreshold, dateToleranceDays) {
+  const { a, b, type, similarity } = f;
+  const same = fieldIsSame(f, dateToleranceDays);
   if (same) {
     const rawA = normVal(a), rawB = normVal(b);
     if (type === 'date' && rawA && rawB && rawA.toLowerCase() !== rawB.toLowerCase()) {
@@ -1754,6 +1820,13 @@ function runCompare() {
   // programmatically (e.g. from the test harness) with an inconsistent state.
   const includeSibSpouses = document.getElementById('includeSibSpouses').checked && includeSiblings;
   const descendantGen = parseInt(document.getElementById('descendantGen').value, 10) || 0;
+  // Name/Date tolerance (Similarity settings panel) are read once here, at
+  // compare time, and baked into this comparison's fieldDiffs/substantially-
+  // different flags — unlike Location tolerance, which stays live and is
+  // re-read every render (see renderReport). Adjusting these two sliders
+  // only takes effect on the next "Compare trees" click.
+  const nameTolerance = parseInt(document.getElementById('nameTolerance').value, 10);
+  const dateToleranceDays = parseInt(document.getElementById('dateTolerance').value, 10);
 
   // Row ids reset every comparison (they're only used within this render —
   // e.g. as flat-mode collapse-section keys — never persisted). Reviewed
@@ -1802,8 +1875,8 @@ function runCompare() {
     if (idA && idB) {
       const indA = dataA.individuals[idA];
       const indB = dataB.individuals[idB];
-      const fieldDiffs = compareIndividuals(indA, indB);
-      rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(), aId: idA, bId: idB, substantiallyDifferent: isSubstantiallyDifferent(indA, indB), ...relationshipInfo('Ancestor', code, 0, '') });
+      const fieldDiffs = compareIndividuals(indA, indB, dateToleranceDays);
+      rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(), aId: idA, bId: idB, substantiallyDifferent: isSubstantiallyDifferent(indA, indB, nameTolerance), ...relationshipInfo('Ancestor', code, 0, '') });
       markShown(idA, idB);
     } else if (idA) {
       totalMissingB++;
@@ -1831,11 +1904,11 @@ function runCompare() {
       if (isAlreadyCovered(pair.aId, pair.bId)) continue;
       const indA = dataA.individuals[pair.aId];
       const indB = dataB.individuals[pair.bId];
-      const fieldDiffs = compareIndividuals(indA, indB);
+      const fieldDiffs = compareIndividuals(indA, indB, dateToleranceDays);
       rows.push({
         role: 'Sibling', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
         name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-        aId: pair.aId, bId: pair.bId, substantiallyDifferent: isSubstantiallyDifferent(indA, indB),
+        aId: pair.aId, bId: pair.bId, substantiallyDifferent: isSubstantiallyDifferent(indA, indB, nameTolerance),
         ...relationshipInfo('Sibling', code, null, combinedSex(indA, indB))
       });
       markShown(pair.aId, pair.bId);
@@ -1862,18 +1935,18 @@ function runCompare() {
       if (isAlreadyCovered(pair.aId, pair.bId)) continue;
       const indA = dataA.individuals[pair.aId];
       const indB = dataB.individuals[pair.bId];
-      const fieldDiffs = compareIndividuals(indA, indB);
+      const fieldDiffs = compareIndividuals(indA, indB, dateToleranceDays);
       // add marriage comparison
       const famA = idA ? findMarriageFam(dataA, idA, pair.aId) : null;
       const famB = idB ? findMarriageFam(dataB, idB, pair.bId) : null;
       const marrA = famA ? famA.marr : { date: '', place: '' };
       const marrB = famB ? famB.marr : { date: '', place: '' };
-      fieldDiffs.push({ label: 'Marriage date', a: marrA.date, b: marrB.date, same: datesMatch(marrA.date, marrB.date), type: 'date', similarity: datesMatch(marrA.date, marrB.date) ? 1 : 0 });
+      fieldDiffs.push({ label: 'Marriage date', a: marrA.date, b: marrB.date, same: datesMatch(marrA.date, marrB.date, dateToleranceDays), type: 'date', similarity: datesMatch(marrA.date, marrB.date, dateToleranceDays) ? 1 : 0 });
       fieldDiffs.push({ label: 'Marriage place', a: marrA.place, b: marrB.place, same: fieldsEqual(marrA.place, marrB.place), type: 'place', similarity: placeSimilarity(marrA.place, marrB.place) });
       rows.push({
         role: 'Spouse', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
         name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-        aId: pair.aId, bId: pair.bId, substantiallyDifferent: isSubstantiallyDifferent(indA, indB),
+        aId: pair.aId, bId: pair.bId, substantiallyDifferent: isSubstantiallyDifferent(indA, indB, nameTolerance),
         ...relationshipInfo('Spouse', code, null, combinedSex(indA, indB))
       });
       markShown(pair.aId, pair.bId);
@@ -1908,11 +1981,11 @@ function runCompare() {
         if (isAlreadyCovered(pair.aId, pair.bId)) continue;
         const indA = dataA.individuals[pair.aId];
         const indB = dataB.individuals[pair.bId];
-        const fieldDiffs = compareIndividuals(indA, indB);
+        const fieldDiffs = compareIndividuals(indA, indB, dateToleranceDays);
         rows.push({
           role: "Sibling's spouse", status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full,
           fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-          aId: pair.aId, bId: pair.bId, substantiallyDifferent: isSubstantiallyDifferent(indA, indB),
+          aId: pair.aId, bId: pair.bId, substantiallyDifferent: isSubstantiallyDifferent(indA, indB, nameTolerance),
           ...relationshipInfo("Sibling's spouse", code, null, combinedSex(indA, indB))
         });
         markShown(pair.aId, pair.bId);
@@ -1948,11 +2021,11 @@ function runCompare() {
       for (const pair of m.pairs) {
         const indA = dataA.individuals[pair.aId];
         const indB = dataB.individuals[pair.bId];
-        const fieldDiffs = compareIndividuals(indA, indB);
+        const fieldDiffs = compareIndividuals(indA, indB, dateToleranceDays);
         rows.push({
           role: label, status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full,
           fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-          aId: pair.aId, bId: pair.bId, substantiallyDifferent: isSubstantiallyDifferent(indA, indB),
+          aId: pair.aId, bId: pair.bId, substantiallyDifferent: isSubstantiallyDifferent(indA, indB, nameTolerance),
           ...relationshipInfo(label, code, genIndex, combinedSex(indA, indB))
         });
         markShown(pair.aId, pair.bId);
@@ -1993,6 +2066,7 @@ function runCompare() {
   }
 
   lastSections = sections;
+  document.getElementById('reportControlsSimilarity').style.display = 'flex';
   document.getElementById('reportControls').style.display = 'flex';
   renderReport();
 }
@@ -2041,10 +2115,23 @@ function matchYearsSuffix(row) {
 }
 
 // Whether a matched row still counts as "different" once the active filters are applied.
-function rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold) {
+// Whether a field counts as "same" once the live "Date tolerance" setting is
+// applied: a date-type field is always recomputed fresh from its raw a/b
+// text via datesMatch() (a pure function of the two strings and a tolerance
+// — recomputing it live is exactly what makes Date tolerance work like
+// Location tolerance, adjustable after the fact without re-comparing), while
+// any other field type just uses its already-computed f.same. Omitted/
+// undefined dateToleranceDays falls back to datesMatch's own default (91
+// days), so a direct call passing only 2-3 args still works exactly as
+// before.
+function fieldIsSame(f, dateToleranceDays) {
+  return f.type === 'date' ? datesMatch(f.a, f.b, dateToleranceDays) : f.same;
+}
+
+function rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays) {
   if (!row.fieldDiffs) return true;
   return row.fieldDiffs.some(f => {
-    if (f.same) return false;
+    if (fieldIsSame(f, dateToleranceDays)) return false;
     if (ignoreSimilarLocations && f.type === 'place' && f.similarity >= locationThreshold) return false;
     return true;
   });
@@ -2061,10 +2148,10 @@ function rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold) {
 //    on, similarity at or above the threshold).
 // Only meaningful once a row is already confirmed to have no effective
 // diff; callers should not call this for a row that still has one.
-function matchExactness(row, ignoreSimilarLocations, locationThreshold) {
+function matchExactness(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays) {
   if (!row.fieldDiffs) return 'exact';
   for (const f of row.fieldDiffs) {
-    if (f.same) {
+    if (fieldIsSame(f, dateToleranceDays)) {
       const rawA = normVal(f.a), rawB = normVal(f.b);
       if (f.type === 'date' && rawA && rawB && rawA.toLowerCase() !== rawB.toLowerCase()) {
         return 'similar';
@@ -2107,7 +2194,7 @@ function matchExactness(row, ignoreSimilarLocations, locationThreshold) {
 // Severity ranking for a section's overall status, worst to best.
 const SECTION_STATUS_RANK = { exact: 0, similar: 1, amber: 2, missing: 3, red: 4 };
 
-function computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold) {
+function computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays) {
   let status = 'exact';
   function upgrade(candidate) {
     if (SECTION_STATUS_RANK[candidate] > SECTION_STATUS_RANK[status]) status = candidate;
@@ -2124,11 +2211,11 @@ function computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirt
     // status is 'both' or 'maybe'
     if (hideNoBirthDate && !normVal(row.birthDate)) continue;
     if (row.substantiallyDifferent) { upgrade('red'); continue; }
-    if (row.status === 'maybe' || rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold)) {
+    if (row.status === 'maybe' || rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays)) {
       upgrade('amber');
       continue;
     }
-    upgrade(matchExactness(row, ignoreSimilarLocations, locationThreshold));
+    upgrade(matchExactness(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays));
   }
   return status;
 }
@@ -2353,12 +2440,30 @@ function renderReport() {
   const hideReviewedItems = document.getElementById('hideReviewedItems').checked;
   const ignoreLikelyAlive = document.getElementById('ignoreLikelyAlive').checked;
   const hideNoBirthDate = document.getElementById('hideNoBirthDate').checked;
-  const ignoreSimilarLocations = document.getElementById('ignoreSimilarLocations').checked;
+  // "Location tolerance" (Similarity settings) folds the old enable checkbox
+  // and threshold slider into one control: 0% behaves exactly like the old
+  // checkbox being unchecked (no leniency at all — the "0 = off" convention
+  // used elsewhere in this app, e.g. descendantGen), and any value above 0%
+  // is the old checkbox being checked with that value as the required
+  // similarity threshold. ignoreSimilarLocations/locationThreshold keep their
+  // original names/meaning from here on so the rest of this function (and
+  // computeSectionStatus/matchExactness/renderValueCell, which are also unit
+  // tested directly against these two params) doesn't need to change.
+  const locationTolerancePct = parseInt(document.getElementById('locationTolerance').value, 10);
+  const ignoreSimilarLocations = locationTolerancePct > 0;
+  const locationThreshold = locationTolerancePct / 100;
   const aliveYears = parseInt(document.getElementById('aliveYears').value, 10);
-  const locationThresholdPct = parseInt(document.getElementById('locationThreshold').value, 10);
-  const locationThreshold = locationThresholdPct / 100;
   document.getElementById('aliveYearsVal').textContent = aliveYears;
-  document.getElementById('locationThresholdVal').textContent = locationThresholdPct + '%';
+  document.getElementById('locationToleranceVal').textContent = locationTolerancePct + '%';
+  // "Date tolerance" is now live too, same as Location tolerance: it's
+  // re-read on every render rather than baked in at "Compare trees" time,
+  // so dragging the slider immediately reclassifies every date field
+  // (Birth/Death/Marriage date) against the new day-window without needing
+  // to re-run the comparison. (Name tolerance remains compare-time-only —
+  // see the note on that slider — since the "substantially different" flag
+  // it feeds is baked onto each row and directly unit-tested that way.)
+  const dateToleranceDays = parseInt(document.getElementById('dateTolerance').value, 10);
+  document.getElementById('dateToleranceVal').textContent = dateToleranceDays;
 
   // Five mutually-exclusive counters, one per status colour — together they
   // ARE the legend now, so the summary boxes can replace it outright instead
@@ -2402,14 +2507,14 @@ function renderReport() {
       category = 'missing';
     } else {
       // status is 'both' or 'maybe'
-      const hasDiff = rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold);
+      const hasDiff = rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays);
       // Exactly one of these four buckets, matching computeSectionStatus's
       // own red > amber > similar/exact precedence for a single row.
       if (row.substantiallyDifferent) {
         category = 'substantial'; totalSubstantialDiffs++;
       } else if (row.status === 'maybe' || hasDiff) {
         category = 'diffs'; totalNeedsVerification++;
-      } else if (matchExactness(row, ignoreSimilarLocations, locationThreshold) === 'exact') {
+      } else if (matchExactness(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays) === 'exact') {
         category = 'exact'; totalExact++;
       } else {
         category = 'similar'; totalSimilar++;
@@ -2443,7 +2548,7 @@ function renderReport() {
         displaySections.push({
           code: section.code, gen: section.gen, rows: visibleRows,
           ancestorHeader: section.ancestorHeader,
-          status: computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold),
+          status: computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays),
           flat: false
         });
       }
@@ -2456,7 +2561,7 @@ function renderReport() {
         if (!kept) continue;
         displaySections.push({
           code: 'row:' + row.id, gen: null, rows: [row], ancestorHeader: row,
-          status: computeSectionStatus({ rows: [row] }, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold),
+          status: computeSectionStatus({ rows: [row] }, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays),
           flat: true
         });
       }
@@ -2529,8 +2634,8 @@ function renderReport() {
       const yearsSuffix = matchYearsSuffix(row);
       // Only a clean 'both' match (no substantial difference, no effective
       // diff) has a meaningful exactness to show on its badge.
-      const exactness = (row.status === 'both' && !row.substantiallyDifferent && !rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold))
-        ? matchExactness(row, ignoreSimilarLocations, locationThreshold)
+      const exactness = (row.status === 'both' && !row.substantiallyDifferent && !rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays))
+        ? matchExactness(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays)
         : null;
       // Flat mode has no bordered match-card beneath the header — just the
       // attributes, laid directly under it — since the header IS this row.
@@ -2562,7 +2667,7 @@ function renderReport() {
       if (row.fieldDiffs) {
         html += `<table style="border:none;">`;
         for (const f of row.fieldDiffs) {
-          html += `<tr style="border:none;"><td style="border:none;padding:2px 8px 2px 0;color:var(--muted);white-space:nowrap;">${esc(f.label)}</td><td style="border:none;padding:2px 0;">${renderValueCell(f, ignoreSimilarLocations, locationThreshold)}</td></tr>`;
+          html += `<tr style="border:none;"><td style="border:none;padding:2px 8px 2px 0;color:var(--muted);white-space:nowrap;">${esc(f.label)}</td><td style="border:none;padding:2px 0;">${renderValueCell(f, ignoreSimilarLocations, locationThreshold, dateToleranceDays)}</td></tr>`;
         }
         html += `</table>`;
       } else {

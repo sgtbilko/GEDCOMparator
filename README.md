@@ -18,7 +18,7 @@ Matches are then shown with options to hide/show details as required based on yo
 
 ###### In Progress
 
-* N/A
+* separate out the similarity checks and make them work on a "Live" basis (just location to go)
 
 
 
