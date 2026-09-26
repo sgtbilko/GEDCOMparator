@@ -18,19 +18,22 @@ Matches are then shown with options to hide/show details as required based on yo
 
 ###### In Progress
 
-* separate out the similarity checks and make them work on a "Live" basis (just location to go)
+* separate out the similarity checks and make them work on a "Live" basis (just name to go)
 
 
 
 ###### Not Started
 
 * hide anonymous
+* show steps from root person and amend hife/show to base on this
 * Check nearest wikitree button logic really is closest - currently grandchild?
 * Amend remaining hide/show options into "similarity" (location), "ignore" (no dob, likely alive, reviewed), "ui" (group, collapse)
 * Check after/before/about logic and tolerance
 * Find a way to add a link to ancestry pages (probably not possible)
 * remember options
 * how far back range
+* does descendants go all the way down tree branches?
+* 
 
 
 
