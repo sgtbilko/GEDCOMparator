@@ -309,6 +309,24 @@ v40 - Made "Date tolerance" live, same as Location tolerance: every date-type
       comparison (see v39) — the "substantially different" flag it feeds is
       baked onto each row and directly unit-tested that way, unlike the
       per-field date comparisons this change touches.
+
+v41 - Made "Name tolerance" live too, closing the gap left by v40: it no
+      longer needs a re-compare to take effect. A matched row no longer
+      carries a baked-in `substantiallyDifferent` boolean computed once at
+      "Compare trees" time; instead it carries the two raw names each side
+      recorded (`nameA`/`nameB` — names themselves don't change after a
+      comparison, so these are stable) plus its own already-stored Birth
+      date/place fieldDiffs, and a new `rowSubstantiallyDifferent(row,
+      nameTolerance)` helper re-runs the full substantially-different check
+      (name check + birth check) fresh on every render against whatever the
+      slider currently says — the same live pattern Location and Date
+      tolerance already use. `birthSubstantiallyDifferent(indA, indB)` was
+      split to delegate to a new raw-string `birthSubstantiallyDifferentRaw`
+      so the birth half of the check can be re-run from a row's fieldDiffs
+      without needing the original individual records around. All three
+      Similarity-settings sliders are now live: dragging any of them
+      immediately reclassifies an already-generated report with no
+      re-compare needed.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -707,10 +725,10 @@ v40 - Made "Date tolerance" live, same as Location tolerance: every date-type
     <div class="opts-stack-line opts-stack-line-wrap">
       <div class="opts-line">
         <label for="nameTolerance">Name tolerance:</label>
-        <input type="range" id="nameTolerance" min="0" max="6" step="1" value="2" oninput="document.getElementById('nameToleranceVal').textContent=this.value" />
+        <input type="range" id="nameTolerance" min="0" max="6" step="1" value="2" oninput="onFilterChange()" />
         <span id="nameToleranceVal">2</span>
       </div>
-      <div class="hint">How many letters of spelling drift between two names (e.g. Catherine/Katherine) still count as the same name before a mismatch is flagged as substantially different. Applies next time you click "Compare trees".</div>
+      <div class="hint">How many letters of spelling drift between two names (e.g. Catherine/Katherine) still count as the same name before a mismatch is flagged as substantially different. Applies live.</div>
     </div>
     <div class="opts-stack-line opts-stack-line-wrap">
       <div class="opts-line">
@@ -1632,23 +1650,55 @@ function placeIsSubsetOrSuperset(a, b) {
 // unless one place is simply a subset/superset of the other (see
 // placeIsSubsetOrSuperset), which is never flagged regardless of similarity
 // score.
-function birthSubstantiallyDifferent(indA, indB) {
-  const yearA = extractYear(indA.birth.date);
-  const yearB = extractYear(indB.birth.date);
+// Raw-string form of the birth check, taking the four values directly rather
+// than two individual records — this is what lets the check be re-run live
+// from a row's already-stored fieldDiffs (see rowSubstantiallyDifferent)
+// without needing the original indA/indB objects around at render time.
+function birthSubstantiallyDifferentRaw(dateA, dateB, placeA, placeB) {
+  const yearA = extractYear(dateA);
+  const yearB = extractYear(dateB);
   if (yearA && yearB && Math.abs(parseInt(yearA, 10) - parseInt(yearB, 10)) > 10) {
     return true;
   }
-  const placeA = normVal(indA.birth.place);
-  const placeB = normVal(indB.birth.place);
-  if (placeA && placeB && !placeIsSubsetOrSuperset(placeA, placeB) && placeSimilarity(placeA, placeB) < 0.3) {
+  const pA = normVal(placeA);
+  const pB = normVal(placeB);
+  if (pA && pB && !placeIsSubsetOrSuperset(pA, pB) && placeSimilarity(pA, pB) < 0.3) {
     return true;
   }
   return false;
 }
 
+function birthSubstantiallyDifferent(indA, indB) {
+  return birthSubstantiallyDifferentRaw(indA.birth.date, indB.birth.date, indA.birth.place, indB.birth.place);
+}
+
 function isSubstantiallyDifferent(indA, indB, nameTolerance) {
   if (!indA || !indB) return false;
   return nameSubstantiallyDifferent(indA.name, indB.name, nameTolerance) || birthSubstantiallyDifferent(indA, indB);
+}
+
+// ---------- Live "substantially different" recomputation (v41) ----------
+// isSubstantiallyDifferent() above needs the full indA/indB individual
+// records, which aren't kept around after runCompare() finishes. To let Name
+// tolerance apply live — like Location and Date tolerance already do — each
+// matched row instead carries just the two things the check actually needs:
+// the raw name objects (nameA/nameB, set at compare time — names themselves
+// never change after a comparison) and the birth date/place strings already
+// sitting in that row's own fieldDiffs (Birth date / Birth place), which are
+// re-read here rather than duplicated onto the row a second time. That's
+// enough to re-run the whole check fresh on every render against whatever
+// nameTolerance the slider currently says, with no re-compare needed.
+// Returns false for a missing-person row (no nameA/nameB — there's no
+// counterpart to compare against) or any other row lacking fieldDiffs.
+function rowSubstantiallyDifferent(row, nameTolerance) {
+  if (!row.nameA || !row.nameB) return false;
+  if (nameSubstantiallyDifferent(row.nameA, row.nameB, nameTolerance)) return true;
+  const birthDateF = row.fieldDiffs && row.fieldDiffs.find(f => f.label === 'Birth date');
+  const birthPlaceF = row.fieldDiffs && row.fieldDiffs.find(f => f.label === 'Birth place');
+  return birthSubstantiallyDifferentRaw(
+    birthDateF ? birthDateF.a : '', birthDateF ? birthDateF.b : '',
+    birthPlaceF ? birthPlaceF.a : '', birthPlaceF ? birthPlaceF.b : ''
+  );
 }
 
 // ---------- Genealogy date comparison ----------
@@ -1820,12 +1870,14 @@ function runCompare() {
   // programmatically (e.g. from the test harness) with an inconsistent state.
   const includeSibSpouses = document.getElementById('includeSibSpouses').checked && includeSiblings;
   const descendantGen = parseInt(document.getElementById('descendantGen').value, 10) || 0;
-  // Name/Date tolerance (Similarity settings panel) are read once here, at
-  // compare time, and baked into this comparison's fieldDiffs/substantially-
-  // different flags — unlike Location tolerance, which stays live and is
-  // re-read every render (see renderReport). Adjusting these two sliders
-  // only takes effect on the next "Compare trees" click.
-  const nameTolerance = parseInt(document.getElementById('nameTolerance').value, 10);
+  // Date tolerance (Similarity settings panel) is read once here, at compare
+  // time, purely as the starting point baked into this comparison's
+  // fieldDiffs — it's then re-read live on every render (see fieldIsSame in
+  // renderReport), same as Location tolerance. Name tolerance is no longer
+  // read here at all: as of v41 it's fully live too (see
+  // rowSubstantiallyDifferent), so nothing about it needs baking in at
+  // compare time — only the raw name each side recorded (nameA/nameB below)
+  // does, since names themselves don't change after a comparison.
   const dateToleranceDays = parseInt(document.getElementById('dateTolerance').value, 10);
 
   // Row ids reset every comparison (they're only used within this render —
@@ -1876,7 +1928,7 @@ function runCompare() {
       const indA = dataA.individuals[idA];
       const indB = dataB.individuals[idB];
       const fieldDiffs = compareIndividuals(indA, indB, dateToleranceDays);
-      rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(), aId: idA, bId: idB, substantiallyDifferent: isSubstantiallyDifferent(indA, indB, nameTolerance), ...relationshipInfo('Ancestor', code, 0, '') });
+      rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(), aId: idA, bId: idB, nameA: indA.name, nameB: indB.name, ...relationshipInfo('Ancestor', code, 0, '') });
       markShown(idA, idB);
     } else if (idA) {
       totalMissingB++;
@@ -1908,7 +1960,7 @@ function runCompare() {
       rows.push({
         role: 'Sibling', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
         name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-        aId: pair.aId, bId: pair.bId, substantiallyDifferent: isSubstantiallyDifferent(indA, indB, nameTolerance),
+        aId: pair.aId, bId: pair.bId, nameA: indA.name, nameB: indB.name,
         ...relationshipInfo('Sibling', code, null, combinedSex(indA, indB))
       });
       markShown(pair.aId, pair.bId);
@@ -1946,7 +1998,7 @@ function runCompare() {
       rows.push({
         role: 'Spouse', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
         name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-        aId: pair.aId, bId: pair.bId, substantiallyDifferent: isSubstantiallyDifferent(indA, indB, nameTolerance),
+        aId: pair.aId, bId: pair.bId, nameA: indA.name, nameB: indB.name,
         ...relationshipInfo('Spouse', code, null, combinedSex(indA, indB))
       });
       markShown(pair.aId, pair.bId);
@@ -1985,7 +2037,7 @@ function runCompare() {
         rows.push({
           role: "Sibling's spouse", status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full,
           fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-          aId: pair.aId, bId: pair.bId, substantiallyDifferent: isSubstantiallyDifferent(indA, indB, nameTolerance),
+          aId: pair.aId, bId: pair.bId, nameA: indA.name, nameB: indB.name,
           ...relationshipInfo("Sibling's spouse", code, null, combinedSex(indA, indB))
         });
         markShown(pair.aId, pair.bId);
@@ -2025,7 +2077,7 @@ function runCompare() {
         rows.push({
           role: label, status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full,
           fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-          aId: pair.aId, bId: pair.bId, substantiallyDifferent: isSubstantiallyDifferent(indA, indB, nameTolerance),
+          aId: pair.aId, bId: pair.bId, nameA: indA.name, nameB: indB.name,
           ...relationshipInfo(label, code, genIndex, combinedSex(indA, indB))
         });
         markShown(pair.aId, pair.bId);
@@ -2194,7 +2246,7 @@ function matchExactness(row, ignoreSimilarLocations, locationThreshold, dateTole
 // Severity ranking for a section's overall status, worst to best.
 const SECTION_STATUS_RANK = { exact: 0, similar: 1, amber: 2, missing: 3, red: 4 };
 
-function computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays) {
+function computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance) {
   let status = 'exact';
   function upgrade(candidate) {
     if (SECTION_STATUS_RANK[candidate] > SECTION_STATUS_RANK[status]) status = candidate;
@@ -2210,7 +2262,7 @@ function computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirt
     }
     // status is 'both' or 'maybe'
     if (hideNoBirthDate && !normVal(row.birthDate)) continue;
-    if (row.substantiallyDifferent) { upgrade('red'); continue; }
+    if (rowSubstantiallyDifferent(row, nameTolerance)) { upgrade('red'); continue; }
     if (row.status === 'maybe' || rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays)) {
       upgrade('amber');
       continue;
@@ -2455,15 +2507,22 @@ function renderReport() {
   const aliveYears = parseInt(document.getElementById('aliveYears').value, 10);
   document.getElementById('aliveYearsVal').textContent = aliveYears;
   document.getElementById('locationToleranceVal').textContent = locationTolerancePct + '%';
-  // "Date tolerance" is now live too, same as Location tolerance: it's
-  // re-read on every render rather than baked in at "Compare trees" time,
-  // so dragging the slider immediately reclassifies every date field
-  // (Birth/Death/Marriage date) against the new day-window without needing
-  // to re-run the comparison. (Name tolerance remains compare-time-only —
-  // see the note on that slider — since the "substantially different" flag
-  // it feeds is baked onto each row and directly unit-tested that way.)
+  // "Date tolerance" is live, same as Location tolerance: it's re-read on
+  // every render rather than baked in at "Compare trees" time, so dragging
+  // the slider immediately reclassifies every date field (Birth/Death/
+  // Marriage date) against the new day-window without needing to re-run the
+  // comparison.
   const dateToleranceDays = parseInt(document.getElementById('dateTolerance').value, 10);
   document.getElementById('dateToleranceVal').textContent = dateToleranceDays;
+  // "Name tolerance" is live too now (v41): re-read here on every render and
+  // passed to rowSubstantiallyDifferent()/computeSectionStatus() below,
+  // instead of being baked into each row once at "Compare trees" time. The
+  // row itself only ever carries the raw name each side recorded (nameA/
+  // nameB) plus its birth date/place (already in fieldDiffs) — everything
+  // the check needs to be re-run fresh against whatever the slider currently
+  // says.
+  const nameTolerance = parseInt(document.getElementById('nameTolerance').value, 10);
+  document.getElementById('nameToleranceVal').textContent = nameTolerance;
 
   // Five mutually-exclusive counters, one per status colour — together they
   // ARE the legend now, so the summary boxes can replace it outright instead
@@ -2510,7 +2569,7 @@ function renderReport() {
       const hasDiff = rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays);
       // Exactly one of these four buckets, matching computeSectionStatus's
       // own red > amber > similar/exact precedence for a single row.
-      if (row.substantiallyDifferent) {
+      if (rowSubstantiallyDifferent(row, nameTolerance)) {
         category = 'substantial'; totalSubstantialDiffs++;
       } else if (row.status === 'maybe' || hasDiff) {
         category = 'diffs'; totalNeedsVerification++;
@@ -2548,7 +2607,7 @@ function renderReport() {
         displaySections.push({
           code: section.code, gen: section.gen, rows: visibleRows,
           ancestorHeader: section.ancestorHeader,
-          status: computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays),
+          status: computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance),
           flat: false
         });
       }
@@ -2561,7 +2620,7 @@ function renderReport() {
         if (!kept) continue;
         displaySections.push({
           code: 'row:' + row.id, gen: null, rows: [row], ancestorHeader: row,
-          status: computeSectionStatus({ rows: [row] }, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays),
+          status: computeSectionStatus({ rows: [row] }, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance),
           flat: true
         });
       }
@@ -2632,21 +2691,22 @@ function renderReport() {
     for (const row of section.rows) {
       const isReviewed = reviewedIds.has(personKey(row));
       const yearsSuffix = matchYearsSuffix(row);
+      const substantiallyDifferent = rowSubstantiallyDifferent(row, nameTolerance);
       // Only a clean 'both' match (no substantial difference, no effective
       // diff) has a meaningful exactness to show on its badge.
-      const exactness = (row.status === 'both' && !row.substantiallyDifferent && !rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays))
+      const exactness = (row.status === 'both' && !substantiallyDifferent && !rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays))
         ? matchExactness(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays)
         : null;
       // Flat mode has no bordered match-card beneath the header — just the
       // attributes, laid directly under it — since the header IS this row.
       const bodyClasses = [section.flat ? 'section-body' : 'match-card'];
       if (isReviewed) bodyClasses.push('reviewed-row');
-      if (!section.flat && row.substantiallyDifferent) bodyClasses.push('substantial-diff');
+      if (!section.flat && substantiallyDifferent) bodyClasses.push('substantial-diff');
       html += `<div class="${bodyClasses.join(' ')}">
         <div class="match-card-topline">
           <div class="match-card-topline-left">
             <span class="role-tag">${esc(row.role)}</span>
-            ${statusBadge(row.status, row.substantiallyDifferent, exactness)}
+            ${statusBadge(row.status, substantiallyDifferent, exactness)}
           </div>
           <label class="reviewed-inline">
             <input type="checkbox" ${isReviewed ? 'checked' : ''} onchange="toggleReviewed('${personKey(row).replace(/'/g, "\\'")}', this.checked)" />

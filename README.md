@@ -18,7 +18,7 @@ Matches are then shown with options to hide/show details as required based on yo
 
 ###### In Progress
 
-* separate out the similarity checks and make them work on a "Live" basis (just name to go)
+* refine the similarities checks to move between similar/different/substantially different
 
 
 
