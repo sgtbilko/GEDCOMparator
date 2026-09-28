@@ -18,22 +18,22 @@ Matches are then shown with options to hide/show details as required based on yo
 
 ###### In Progress
 
-* refine the similarities checks to move between similar/different/substantially different
+* Push a match of "abt 1900" and "1900" from similar to different when date similarity = 0
 
 
 
 ###### Not Started
 
 * hide anonymous
-* show steps from root person and amend hife/show to base on this
+* show steps from root person and amend hide/show to base on this
 * Check nearest wikitree button logic really is closest - currently grandchild?
-* Amend remaining hide/show options into "similarity" (location), "ignore" (no dob, likely alive, reviewed), "ui" (group, collapse)
+* Amend remaining hide/show options into "ignore" (no dob, likely alive, reviewed), "ui" (group, collapse)
 * Check after/before/about logic and tolerance
 * Find a way to add a link to ancestry pages (probably not possible)
 * remember options
 * how far back range
 * does descendants go all the way down tree branches?
-* 
+* optionally apply date \& location similarity checks to marriage and death
 
 
 

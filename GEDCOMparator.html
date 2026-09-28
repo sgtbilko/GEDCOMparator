@@ -327,6 +327,78 @@ v41 - Made "Name tolerance" live too, closing the gap left by v40: it no
       Similarity-settings sliders are now live: dragging any of them
       immediately reclassifies an already-generated report with no
       re-compare needed.
+v42 - Unified all three Similarity settings into one consistent 3-tier model
+      (similar / different / substantially different), so adjusting ANY of
+      Name, Date or Location tolerance can move a match into any of the three
+      categories. Each field type now has a normalized distance; its slider
+      sets t_similar, and a fixed per-field multiplier k derives
+      t_substantial = t_similar x k, so the red bar rises and falls together
+      with the tolerance instead of being a separate hardcoded number:
+        - Name (k = 3): distance = edit distance / longer string length,
+          worst of surname and first given name. The slider is now a
+          percentage (0-30%, default 15%) instead of a raw letter count, so a
+          2-letter slip is judged relative to the name's length. Names now
+          have a real "similar" tier too (text differs but within tolerance,
+          e.g. Catherine/Katherine or an extra middle name = light green,
+          "names recognized as similar"); previously any text difference on
+          the Name row was simply amber. Default red cutoff: 45%.
+        - Date (k = 10): distance = days between the two birth dates. Default
+          red cutoff: 910 days (~2.5 years), replacing the old fixed "more
+          than 10 years" rule, so it is much more sensitive by default and
+          scales with the slider. The full day/month/year same-day rule is
+          unchanged and governs only similar-vs-different; it does not shrink
+          the red threshold (a one-day slip in a full date stays amber).
+        - Location (k = 1.5): distance = 1 - bigram similarity. Default red
+          cutoff: more than 75% different (was a fixed similarity < 0.3). The
+          subset/superset carve-out ("Torgau, Germany" vs "Germany") is
+          unchanged and still never flagged.
+      Location tolerance's DIRECTION was corrected to match its label and
+      hint: the slider is now the % two places may differ (0% = exact only,
+      100% = anything matches) rather than the minimum similarity required
+      (where 100% was strictest and 0% meant "off"). The default of 50% is
+      unaffected. Substantially-different remains birth-only (name, birth
+      date, birth place); death and marriage fields still cannot turn a row
+      red - a possible optional future comparison. The Similarity panel now
+      lists Name, Date, Location in that order and shows each slider's live
+      red cutoff. isMinorSpellingVariant() was removed (superseded by
+      nameRatio()/classifyName()). Degenerate case worth knowing: at 0% / 0
+      days a slider has no middle tier (any difference is substantial).
+v43 - Qualifier wording variants on a date are now an EXACT match, not merely
+      "similar". "ABT 1900", "Abt. 1900", "abt 1900", "About 1900" and
+      "circa 1900" are all the same date written differently, and likewise
+      Bef/Before and Aft/After, so they no longer downgrade a row from exact
+      (deep green) to similar (light green). New canonicalDateText()/
+      dateTextEquivalent() fold case, spacing, and the qualifier keyword's
+      spelling and trailing period; everything after the qualifier is left
+      as written, so "12 Nov 1900" vs "12 November 1900" is still similar.
+      Cal/Est are not folded into About (different meaning). Tolerance
+      logic (datesMatch) is unchanged; this only affects the exact-vs-similar
+      label and the "dates recognized as equivalent" note.
+v44 - Month-name wording is now an EXACT match too: "12 Nov 1900", "12 NOV.
+      1900" and "12 November 1900" (Sep/Sept/September, etc.) no longer
+      downgrade a row from exact to similar, extending v43's treatment of
+      qualifier wording. canonicalDateText() now also folds each month
+      token to a single abbreviation (MONTH_ABBREVS). Only wording is
+      folded: genuinely different dates (different day, month, year or
+      qualifier) are unaffected, and datesMatch/tolerance logic is unchanged.
+v45 - No functional change: records an explicit design decision about the
+      Abt/Cal/Est date qualifiers, so it isn't later mistaken for an
+      oversight. All three mark a date as approximate rather than a firm
+      claim, so datesMatch() deliberately treats them alike when applying
+      Date tolerance (two approximate dates can't be held to a same-day
+      standard, and "Abt 1900" vs "Est 1901" is a fair comparison within
+      tolerance). They are NOT treated as wording variants of one another
+      for the exact-vs-similar label (canonicalDateText), because they carry
+      different provenance: Abt means the source itself was vague, Cal means
+      the date was calculated from other data (e.g. a birth year derived
+      from an age at death), Est means a researcher's estimate. So "Cal
+      1900" vs "Abt 1900" is a tolerance-based "similar" match, never
+      "exact". "Circa" is not a GEDCOM keyword but simply an informal
+      spelling of "about", so it IS folded into Abt for exactness (v43).
+      Considered and rejected: treating Cal/Est as strictly different from
+      Abt even for tolerance (would show amber), or as exact synonyms of Abt.
+      Revisit only if real files use Cal/Est often enough to make the
+      current behaviour noisy.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -716,19 +788,11 @@ v41 - Made "Name tolerance" live too, closing the gap left by v40: it no
     <h2 style="flex-basis:100%;margin:0 0 4px;font-size:15px;">3. Similarity settings</h2>
     <div class="opts-stack-line opts-stack-line-wrap">
       <div class="opts-line">
-        <label for="locationTolerance">Location tolerance:</label>
-        <input type="range" id="locationTolerance" min="0" max="100" step="10" value="50" oninput="onFilterChange()" />
-        <span id="locationToleranceVal">50%</span>
-      </div>
-      <div class="hint">Two recorded places are treated as a match once they're at least this similar (0% = only an exact match counts; 100% = almost any two places count). Lets a full "Torgau, Germany" match a bare "Germany", for example. Applies live.</div>
-    </div>
-    <div class="opts-stack-line opts-stack-line-wrap">
-      <div class="opts-line">
         <label for="nameTolerance">Name tolerance:</label>
-        <input type="range" id="nameTolerance" min="0" max="6" step="1" value="2" oninput="onFilterChange()" />
-        <span id="nameToleranceVal">2</span>
+        <input type="range" id="nameTolerance" min="0" max="30" step="5" value="15" oninput="onFilterChange()" />
+        <span id="nameToleranceVal">15%</span>
       </div>
-      <div class="hint">How many letters of spelling drift between two names (e.g. Catherine/Katherine) still count as the same name before a mismatch is flagged as substantially different. Applies live.</div>
+      <div class="hint">How different two names can be, as a % of their letters (Catherine/Katherine is about 11%), and still count as the same name. Surname and first given name are checked separately; extra, missing or reordered middle names are ignored. Beyond <strong>3&times;</strong> this tolerance a name is flagged substantially different: currently over <strong id="nameSubstVal">45%</strong>. Applies live.</div>
     </div>
     <div class="opts-stack-line opts-stack-line-wrap">
       <div class="opts-line">
@@ -736,7 +800,15 @@ v41 - Made "Name tolerance" live too, closing the gap left by v40: it no
         <input type="range" id="dateTolerance" min="0" max="365" step="7" value="91" oninput="onFilterChange()" />
         <span id="dateToleranceVal">91</span> days
       </div>
-      <div class="hint">How many days apart two approximate (About/Year-only) dates can be and still count as the same event. A precise, full day/month/year date on either side always requires a same-day match regardless of this setting. Applies live.</div>
+      <div class="hint">How many days apart two approximate (About/Year-only) dates can be and still count as the same event. A precise, full day/month/year date on either side always needs a same-day match regardless of this setting. A birth date more than <strong>10&times;</strong> this tolerance apart is flagged substantially different: currently over <strong id="dateSubstVal">910 days</strong>. Applies live.</div>
+    </div>
+    <div class="opts-stack-line opts-stack-line-wrap">
+      <div class="opts-line">
+        <label for="locationTolerance">Location tolerance:</label>
+        <input type="range" id="locationTolerance" min="0" max="100" step="10" value="50" oninput="onFilterChange()" />
+        <span id="locationToleranceVal">50%</span>
+      </div>
+      <div class="hint">How different two recorded places can be, as a %, and still count as a match (0% = only an exact match counts; 100% = any two places count). Lets a full "Torgau, Germany" match a bare "Germany", for example. A birth place more than <strong>1.5&times;</strong> this different is flagged substantially different (unless one place simply contains the other): currently over <strong id="locationSubstVal">75%</strong> different. Applies live.</div>
     </div>
   </div>
 
@@ -1559,23 +1631,33 @@ function placeSimilarity(a, b) {
 }
 // Default only — the active threshold is read live from the slider in renderReport.
 
-// ---------- "Substantially different" header flag ----------
-// A matched pair (status 'both'/'maybe') is still shown with the usual green
-// header, EXCEPT when the two records disagree badly enough that it's worth a
-// visual red flag telling the person to look closer — as opposed to routine,
-// expected messiness (an extra middle name, a typo, one file recording a place
-// down to the town and the other only the country). Two independent checks:
-//  - name: the surname or primary given name genuinely differs (not just a
-//    couple of characters of spelling drift, and not just an extra/missing/
-//    reordered middle name);
-//  - birth: the birth year differs by more than 10 years, or the birth places
-//    are recorded on both sides but are barely related at all.
-// Either being true, on its own, is enough to flag the pair. A field that's
-// simply blank on one side is never treated as a substantial conflict here —
-// that's a missing-data situation the existing (blank) styling already covers.
+// ---------- Unified 3-tier similarity model (v42) ----------
+// Name, Date and Location tolerance all work the same way now. Each field
+// type has a normalized DISTANCE (0 = identical), its slider sets t_similar,
+// and a fixed per-field multiplier k derives t_substantial = t_similar * k:
+//   distance <= t_similar                  -> similar (counts as a match)
+//   t_similar < distance <= t_substantial  -> different (amber, verify)
+//   distance >  t_substantial              -> substantially different (red)
+// Widening a slider therefore raises BOTH bars together: what still counts
+// as "the same" and what counts as "alarming".
+//   name:     distance = edit distance / longer string length, worst of the
+//             surname and the first given name (middle names never count).
+//   date:     distance = days between the two dates (birth date only).
+//   location: distance = 1 - bigram similarity (birth place only).
+// Hard overrides sit OUTSIDE this continuum, unchanged: a full day/month/year
+// date on either side must still match to the day (datesMatch), and a birth
+// place that is simply a subset/superset of the other side's is never flagged
+// substantially different (placeIsSubsetOrSuperset).
+// Only name + birth date + birth place can turn a row red. Death and marriage
+// fields deliberately do not (birth details are the critical identifiers).
+const SUBSTANTIAL_K = { name: 3, date: 10, location: 1.5 };
+// Fallbacks used only when a caller omits a tolerance argument.
+const DEFAULT_NAME_TOLERANCE = 0.15;      // ratio of letters (slider: 15%)
+const DEFAULT_DATE_TOLERANCE_DAYS = 91;
+const DEFAULT_LOCATION_THRESHOLD = 0.5;   // MIN similarity to count as a match (slider: 50% tolerance)
+const TIER_EPS = 1e-9;                    // float slack so 15% * 3 lands cleanly on 45%
 
-// Levenshtein edit distance — used to tell "a couple of characters of spelling
-// drift" (e.g. Catherine/Katherine) apart from a genuinely different name.
+// Levenshtein edit distance — the raw material for the name distance ratio.
 function levenshteinDistance(a, b) {
   const m = a.length, n = b.length;
   if (!m) return n;
@@ -1592,40 +1674,49 @@ function levenshteinDistance(a, b) {
   return prev[n];
 }
 
-// Two non-empty, already-normalized strings count as "just a spelling variant"
-// when they're identical or within maxDistance characters (edit distance) of
-// each other — maxDistance defaults to 2 (the original hardcoded value) when
-// omitted, and is otherwise the live "Name tolerance" setting. Blank vs.
-// non-blank is never a spelling variant — that's missing data, handled by
-// the caller.
-function isMinorSpellingVariant(a, b, maxDistance) {
-  if (!a || !b) return false;
-  if (a === b) return true;
-  const threshold = typeof maxDistance === 'number' ? maxDistance : 2;
-  return levenshteinDistance(a, b) <= threshold;
+// Length-normalized edit distance between two already-normalized strings:
+// 0 = identical, 1 = nothing in common. null when either is blank (missing
+// data is never a conflict — the caller decides what that means).
+function nameRatio(a, b) {
+  if (!a || !b) return null;
+  if (a === b) return 0;
+  return levenshteinDistance(a, b) / Math.max(a.length, b.length);
 }
 
-// name: {given, surname, full} as produced by parseNameValue/extractIndividual.
-// Compares surname and primary (first) given-name token independently, since
-// GEDCOM stores any middle names as extra words within the given-name field —
-// an extra, missing, or reordered middle name never trips this on its own.
-// nameTolerance is the "Name tolerance" setting's edit-distance threshold
-// (see isMinorSpellingVariant); omitted/undefined preserves the original
-// fixed threshold of 2.
+// name: {given, surname, full} as produced by parseNameValue. Surname and the
+// first given-name token are measured independently (GEDCOM keeps middle names
+// as extra words in the given field, so an extra/missing/reordered middle name
+// never registers) and the WORSE of the two is the name's distance. Returns
+// null when neither component can be compared (one side blank on both).
+function nameDistance(nameA, nameB) {
+  const ratios = [];
+  ratios.push(nameRatio(normalizeName(nameA.surname), normalizeName(nameB.surname)));
+  const firstA = normalizeName(nameA.given).split(' ').filter(Boolean)[0] || '';
+  const firstB = normalizeName(nameB.given).split(' ').filter(Boolean)[0] || '';
+  ratios.push(nameRatio(firstA, firstB));
+  const usable = ratios.filter(r => r !== null);
+  return usable.length ? Math.max(...usable) : null;
+}
+
+// nameTolerance is a RATIO (0.15 = 15% of letters), i.e. t_similar; omitted
+// falls back to DEFAULT_NAME_TOLERANCE. Returns one of:
+//   'exact'       — the recorded names are identical (ignoring case)
+//   'similar'     — different text, but within t_similar
+//   'different'   — between t_similar and t_substantial (or not comparable)
+//   'substantial' — beyond t_substantial
+function classifyName(nameA, nameB, nameTolerance) {
+  if (fieldsEqual(nameA.full, nameB.full)) return 'exact';
+  const tSim = typeof nameTolerance === 'number' ? nameTolerance : DEFAULT_NAME_TOLERANCE;
+  const tSub = tSim * SUBSTANTIAL_K.name;
+  const d = nameDistance(nameA, nameB);
+  if (d === null) return 'different';
+  if (d <= tSim + TIER_EPS) return 'similar';
+  if (d <= tSub + TIER_EPS) return 'different';
+  return 'substantial';
+}
+
 function nameSubstantiallyDifferent(nameA, nameB, nameTolerance) {
-  const surnameA = normalizeName(nameA.surname);
-  const surnameB = normalizeName(nameB.surname);
-  if (surnameA && surnameB && surnameA !== surnameB && !isMinorSpellingVariant(surnameA, surnameB, nameTolerance)) {
-    return true;
-  }
-  const givenTokensA = normalizeName(nameA.given).split(' ').filter(Boolean);
-  const givenTokensB = normalizeName(nameB.given).split(' ').filter(Boolean);
-  const firstA = givenTokensA[0] || '';
-  const firstB = givenTokensB[0] || '';
-  if (firstA && firstB && firstA !== firstB && !isMinorSpellingVariant(firstA, firstB, nameTolerance)) {
-    return true;
-  }
-  return false;
+  return classifyName(nameA, nameB, nameTolerance) === 'substantial';
 }
 
 // True when one recorded place is a subset/superset of the other — e.g. "Torgau,
@@ -1641,63 +1732,80 @@ function placeIsSubsetOrSuperset(a, b) {
   return compactA.includes(compactB) || compactB.includes(compactA);
 }
 
-// indA/indB: individual records (as extracted by extractIndividual). A birth
-// year gap of more than 10 years is substantial; so is a recorded birth place
-// on both sides that shares almost nothing in common (bigram similarity below
-// 0.3 — comfortably below the 0.5 default "treat similar locations as
-// matching" threshold elsewhere in the app, since this flag is meant to catch
-// places that aren't just a looser/tighter description of the same location) —
-// unless one place is simply a subset/superset of the other (see
-// placeIsSubsetOrSuperset), which is never flagged regardless of similarity
-// score.
-// Raw-string form of the birth check, taking the four values directly rather
-// than two individual records — this is what lets the check be re-run live
-// from a row's already-stored fieldDiffs (see rowSubstantiallyDifferent)
-// without needing the original indA/indB objects around at render time.
-function birthSubstantiallyDifferentRaw(dateA, dateB, placeA, placeB) {
-  const yearA = extractYear(dateA);
-  const yearB = extractYear(dateB);
-  if (yearA && yearB && Math.abs(parseInt(yearA, 10) - parseInt(yearB, 10)) > 10) {
-    return true;
-  }
-  const pA = normVal(placeA);
-  const pB = normVal(placeB);
-  if (pA && pB && !placeIsSubsetOrSuperset(pA, pB) && placeSimilarity(pA, pB) < 0.3) {
-    return true;
-  }
-  return false;
+// Days between two recorded dates. Both parseable -> gap between their
+// midpoints (qualifiers such as Bef/Aft/Abt are ignored for distance; an
+// approximate date's midpoint is its own best estimate). Otherwise, if both
+// at least contain a 4-digit year, the year gap in days. null when either
+// side is blank/unusable (missing data, never a conflict).
+function dateGapDays(rawA, rawB) {
+  const pa = parseGenealogyDate(rawA), pb = parseGenealogyDate(rawB);
+  if (pa && pb) return Math.abs(dateMidpointDays(pa) - dateMidpointDays(pb));
+  const ya = extractYear(rawA), yb = extractYear(rawB);
+  if (ya && yb) return Math.abs(parseInt(ya, 10) - parseInt(yb, 10)) * 365.25;
+  return null;
 }
 
-function birthSubstantiallyDifferent(indA, indB) {
-  return birthSubstantiallyDifferentRaw(indA.birth.date, indB.birth.date, indA.birth.place, indB.birth.place);
+// Birth date is substantially different once the gap exceeds
+// dateToleranceDays * 10. NOTE the "same to the day" rule for full dates
+// governs only the similar/different boundary (datesMatch); it does not
+// shrink this red threshold, so a one-day slip in a full date is amber, not red.
+function birthDateSubstantiallyDifferent(dateA, dateB, dateToleranceDays) {
+  const tSim = typeof dateToleranceDays === 'number' ? dateToleranceDays : DEFAULT_DATE_TOLERANCE_DAYS;
+  const gap = dateGapDays(dateA, dateB);
+  if (gap === null) return false;
+  return gap > tSim * SUBSTANTIAL_K.date + TIER_EPS;
 }
 
-function isSubstantiallyDifferent(indA, indB, nameTolerance) {
+// locationThreshold is the MIN bigram similarity that counts as a match
+// (1 - the Location tolerance slider), so t_similar as a distance is
+// 1 - locationThreshold. Beyond min(1, that * 1.5) the place is substantially
+// different — unless one place contains the other (hard override).
+function birthPlaceSubstantiallyDifferent(placeA, placeB, locationThreshold) {
+  const pA = normVal(placeA), pB = normVal(placeB);
+  if (!pA || !pB) return false;
+  if (placeIsSubsetOrSuperset(pA, pB)) return false;
+  const thr = typeof locationThreshold === 'number' ? locationThreshold : DEFAULT_LOCATION_THRESHOLD;
+  const tSimDist = 1 - thr;
+  const tSubDist = Math.min(1, tSimDist * SUBSTANTIAL_K.location);
+  const dist = 1 - placeSimilarity(pA, pB);
+  return dist > tSubDist + TIER_EPS;
+}
+
+// Raw-string form of the birth check, so it can be re-run live from a row's
+// already-stored fieldDiffs (see rowSubstantiallyDifferent) without needing
+// the original individual records around at render time.
+function birthSubstantiallyDifferentRaw(dateA, dateB, placeA, placeB, dateToleranceDays, locationThreshold) {
+  return birthDateSubstantiallyDifferent(dateA, dateB, dateToleranceDays) ||
+         birthPlaceSubstantiallyDifferent(placeA, placeB, locationThreshold);
+}
+
+function birthSubstantiallyDifferent(indA, indB, dateToleranceDays, locationThreshold) {
+  return birthSubstantiallyDifferentRaw(indA.birth.date, indB.birth.date, indA.birth.place, indB.birth.place, dateToleranceDays, locationThreshold);
+}
+
+function isSubstantiallyDifferent(indA, indB, nameTolerance, dateToleranceDays, locationThreshold) {
   if (!indA || !indB) return false;
-  return nameSubstantiallyDifferent(indA.name, indB.name, nameTolerance) || birthSubstantiallyDifferent(indA, indB);
+  return nameSubstantiallyDifferent(indA.name, indB.name, nameTolerance) ||
+         birthSubstantiallyDifferent(indA, indB, dateToleranceDays, locationThreshold);
 }
 
-// ---------- Live "substantially different" recomputation (v41) ----------
-// isSubstantiallyDifferent() above needs the full indA/indB individual
-// records, which aren't kept around after runCompare() finishes. To let Name
-// tolerance apply live — like Location and Date tolerance already do — each
-// matched row instead carries just the two things the check actually needs:
-// the raw name objects (nameA/nameB, set at compare time — names themselves
-// never change after a comparison) and the birth date/place strings already
-// sitting in that row's own fieldDiffs (Birth date / Birth place), which are
-// re-read here rather than duplicated onto the row a second time. That's
-// enough to re-run the whole check fresh on every render against whatever
-// nameTolerance the slider currently says, with no re-compare needed.
-// Returns false for a missing-person row (no nameA/nameB — there's no
-// counterpart to compare against) or any other row lacking fieldDiffs.
-function rowSubstantiallyDifferent(row, nameTolerance) {
+// ---------- Live "substantially different" recomputation ----------
+// Individual records aren't kept after runCompare() finishes, so each matched
+// row carries just what the check needs: the raw names (nameA/nameB, set at
+// compare time — names never change afterward) and the birth date/place
+// strings already in its own fieldDiffs. That lets all three Similarity
+// sliders apply live: every render re-runs the whole check against whatever
+// the sliders currently say, with no re-compare. Returns false for a
+// missing-person row (no counterpart to compare against).
+function rowSubstantiallyDifferent(row, nameTolerance, dateToleranceDays, locationThreshold) {
   if (!row.nameA || !row.nameB) return false;
   if (nameSubstantiallyDifferent(row.nameA, row.nameB, nameTolerance)) return true;
   const birthDateF = row.fieldDiffs && row.fieldDiffs.find(f => f.label === 'Birth date');
   const birthPlaceF = row.fieldDiffs && row.fieldDiffs.find(f => f.label === 'Birth place');
   return birthSubstantiallyDifferentRaw(
     birthDateF ? birthDateF.a : '', birthDateF ? birthDateF.b : '',
-    birthPlaceF ? birthPlaceF.a : '', birthPlaceF ? birthPlaceF.b : ''
+    birthPlaceF ? birthPlaceF.a : '', birthPlaceF ? birthPlaceF.b : '',
+    dateToleranceDays, locationThreshold
   );
 }
 
@@ -1710,6 +1818,7 @@ const MONTH_NAMES = {
   sep: 9, sept: 9, september: 9, oct: 10, october: 10, nov: 11, november: 11,
   dec: 12, december: 12
 };
+const MONTH_ABBREVS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 function monthNameToNum(s) {
   return MONTH_NAMES[s.toLowerCase().replace(/\.$/, '')] || null;
 }
@@ -1756,6 +1865,35 @@ function dateMidpointDays(p) {
   return Date.UTC(p.year, mo, da) / 86400000;
 }
 
+// Canonical text of a date for the "is this an EXACT match or only a similar
+// one" question (not for datesMatch itself). Case, spacing, the qualifier
+// keyword's spelling/period, and the month's spelling/period are wording, not
+// information: "ABT 1900", "Abt. 1900", "About 1900" and "circa 1900" all
+// canonicalize alike, as do Bef/Before and Aft/After, and "12 Nov 1900",
+// "12 NOV. 1900" and "12 November 1900" (Sep/Sept/September likewise).
+// Everything else is left exactly as written. (Cal/Est are deliberately NOT
+// folded into About: they mean something different, even though datesMatch
+// treats them alike for tolerance purposes.)
+function canonicalDateText(raw) {
+  let s = normVal(raw).toLowerCase().replace(/\s+/g, ' ');
+  let prefix = '';
+  const m = s.match(/^(abt|about|circa|bef|before|aft|after)\.?\s+(.*)$/);
+  if (m) {
+    prefix = { abt: 'abt', about: 'abt', circa: 'abt', bef: 'bef', before: 'bef', aft: 'aft', after: 'aft' }[m[1]] + ' ';
+    s = m[2];
+  }
+  const rest = s.split(' ').map(tok => {
+    const word = tok.replace(/\.$/, '');
+    const num = MONTH_NAMES[word];
+    return num ? MONTH_ABBREVS[num - 1] : tok;
+  }).join(' ');
+  return prefix + rest;
+}
+
+function dateTextEquivalent(a, b) {
+  return canonicalDateText(a) === canonicalDateText(b);
+}
+
 // Two dates match when:
 //  - both are Bef/Aft-qualified with the same qualifier (Bef with Bef, Aft with Aft) AND the
 //    same underlying date — since a vague Bef/Aft value should be tightened to the most
@@ -1791,7 +1929,7 @@ function datesMatch(rawA, rawB, toleranceDays) {
 // fixed 91-day window (see datesMatch).
 function compareIndividuals(indA, indB, dateToleranceDays) {
   const fields = [
-    ['Name', indA.name.full, indB.name.full, 'text'],
+    ['Name', indA.name.full, indB.name.full, 'name'],
     ['Birth date', indA.birth.date, indB.birth.date, 'date'],
     ['Birth place', indA.birth.place, indB.birth.place, 'place'],
     ['Death date', indA.death.date, indB.death.date, 'date'],
@@ -1800,7 +1938,12 @@ function compareIndividuals(indA, indB, dateToleranceDays) {
   return fields.map(([label, a, b, type]) => {
     const same = type === 'date' ? datesMatch(a, b, dateToleranceDays) : fieldsEqual(a, b);
     const similarity = type === 'place' ? placeSimilarity(a, b) : (same ? 1 : 0);
-    return { label, a, b, same, type, similarity };
+    const f = { label, a, b, same, type, similarity };
+    // The Name field keeps both raw name objects so its similar/different
+    // tier can be re-derived live from the Name tolerance slider (see
+    // fieldIsSame / classifyName), the same way date fields are.
+    if (type === 'name') { f.nameA = indA.name; f.nameB = indB.name; }
+    return f;
   });
 }
 
@@ -1838,13 +1981,16 @@ function renderLinks(links, nearestWikiTreeUrl) {
   return `<div class="match-links">${items.join('')}</div>`;
 }
 
-function renderValueCell(f, ignoreSimilarLocations, locationThreshold, dateToleranceDays) {
+function renderValueCell(f, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance) {
   const { a, b, type, similarity } = f;
-  const same = fieldIsSame(f, dateToleranceDays);
+  const same = fieldIsSame(f, dateToleranceDays, nameTolerance);
   if (same) {
     const rawA = normVal(a), rawB = normVal(b);
-    if (type === 'date' && rawA && rawB && rawA.toLowerCase() !== rawB.toLowerCase()) {
+    if (type === 'date' && rawA && rawB && !dateTextEquivalent(rawA, rawB)) {
       return `<span class="similar-cell">A: ${esc(a)} · B: ${esc(b)} <span class="similar-note">(dates recognized as equivalent)</span></span>`;
+    }
+    if (type === 'name' && rawA && rawB && rawA.toLowerCase() !== rawB.toLowerCase()) {
+      return `<span class="similar-cell">A: ${esc(a)} · B: ${esc(b)} <span class="similar-note">(names recognized as similar)</span></span>`;
     }
     const val = rawA || rawB;
     return `<span class="same-cell">${val ? esc(val) : '<span class="empty-val">—</span>'}</span>`;
@@ -1873,11 +2019,10 @@ function runCompare() {
   // Date tolerance (Similarity settings panel) is read once here, at compare
   // time, purely as the starting point baked into this comparison's
   // fieldDiffs — it's then re-read live on every render (see fieldIsSame in
-  // renderReport), same as Location tolerance. Name tolerance is no longer
-  // read here at all: as of v41 it's fully live too (see
-  // rowSubstantiallyDifferent), so nothing about it needs baking in at
-  // compare time — only the raw name each side recorded (nameA/nameB below)
-  // does, since names themselves don't change after a comparison.
+  // renderReport), same as Location tolerance. Name tolerance isn't read
+  // here at all: it's fully live too (see rowSubstantiallyDifferent /
+  // classifyName), so only the raw name each side recorded (nameA/nameB
+  // below) is stored, since names themselves don't change after a comparison.
   const dateToleranceDays = parseInt(document.getElementById('dateTolerance').value, 10);
 
   // Row ids reset every comparison (they're only used within this render —
@@ -2176,14 +2321,22 @@ function matchYearsSuffix(row) {
 // undefined dateToleranceDays falls back to datesMatch's own default (91
 // days), so a direct call passing only 2-3 args still works exactly as
 // before.
-function fieldIsSame(f, dateToleranceDays) {
-  return f.type === 'date' ? datesMatch(f.a, f.b, dateToleranceDays) : f.same;
+function fieldIsSame(f, dateToleranceDays, nameTolerance) {
+  if (f.type === 'date') return datesMatch(f.a, f.b, dateToleranceDays);
+  // A Name field is re-classified live from its raw names: exact or similar
+  // both count as "same"; different/substantial do not. (A hand-built field
+  // without raw names just uses its stored f.same.)
+  if (f.type === 'name' && f.nameA && f.nameB) {
+    const tier = classifyName(f.nameA, f.nameB, nameTolerance);
+    return tier === 'exact' || tier === 'similar';
+  }
+  return f.same;
 }
 
-function rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays) {
+function rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance) {
   if (!row.fieldDiffs) return true;
   return row.fieldDiffs.some(f => {
-    if (fieldIsSame(f, dateToleranceDays)) return false;
+    if (fieldIsSame(f, dateToleranceDays, nameTolerance)) return false;
     if (ignoreSimilarLocations && f.type === 'place' && f.similarity >= locationThreshold) return false;
     return true;
   });
@@ -2194,18 +2347,21 @@ function rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold, dat
 // only counts as matching thanks to a leniency setting:
 //  - a date field recognized as equivalent despite different wording (e.g.
 //    "12 Nov 1900" vs "12 November 1900", or two approximate dates within
-//    the flat tolerance) — same is true, but the raw text differs;
+//    the date tolerance) — same is true, but the raw text differs;
+//  - a name whose text differs but sits within Name tolerance (a spelling
+//    variant, or an extra/missing middle name);
 //  - a place field that doesn't match its text exactly but is being waved
-//    through by "treat similar locations as matching" (ignoreSimilarLocations
-//    on, similarity at or above the threshold).
+//    through by Location tolerance (ignoreSimilarLocations on, similarity at
+//    or above the threshold).
 // Only meaningful once a row is already confirmed to have no effective
 // diff; callers should not call this for a row that still has one.
-function matchExactness(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays) {
+function matchExactness(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance) {
   if (!row.fieldDiffs) return 'exact';
   for (const f of row.fieldDiffs) {
-    if (fieldIsSame(f, dateToleranceDays)) {
+    if (fieldIsSame(f, dateToleranceDays, nameTolerance)) {
       const rawA = normVal(f.a), rawB = normVal(f.b);
-      if (f.type === 'date' && rawA && rawB && rawA.toLowerCase() !== rawB.toLowerCase()) {
+      const textDiffers = f.type === 'date' ? !dateTextEquivalent(rawA, rawB) : rawA.toLowerCase() !== rawB.toLowerCase();
+      if ((f.type === 'date' || f.type === 'name') && rawA && rawB && textDiffers) {
         return 'similar';
       }
     } else if (f.type === 'place' && ignoreSimilarLocations && f.similarity >= locationThreshold) {
@@ -2262,12 +2418,12 @@ function computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirt
     }
     // status is 'both' or 'maybe'
     if (hideNoBirthDate && !normVal(row.birthDate)) continue;
-    if (rowSubstantiallyDifferent(row, nameTolerance)) { upgrade('red'); continue; }
-    if (row.status === 'maybe' || rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays)) {
+    if (rowSubstantiallyDifferent(row, nameTolerance, dateToleranceDays, locationThreshold)) { upgrade('red'); continue; }
+    if (row.status === 'maybe' || rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance)) {
       upgrade('amber');
       continue;
     }
-    upgrade(matchExactness(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays));
+    upgrade(matchExactness(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance));
   }
   return status;
 }
@@ -2503,7 +2659,7 @@ function renderReport() {
   // tested directly against these two params) doesn't need to change.
   const locationTolerancePct = parseInt(document.getElementById('locationTolerance').value, 10);
   const ignoreSimilarLocations = locationTolerancePct > 0;
-  const locationThreshold = locationTolerancePct / 100;
+  const locationThreshold = (100 - locationTolerancePct) / 100;
   const aliveYears = parseInt(document.getElementById('aliveYears').value, 10);
   document.getElementById('aliveYearsVal').textContent = aliveYears;
   document.getElementById('locationToleranceVal').textContent = locationTolerancePct + '%';
@@ -2521,8 +2677,15 @@ function renderReport() {
   // nameB) plus its birth date/place (already in fieldDiffs) — everything
   // the check needs to be re-run fresh against whatever the slider currently
   // says.
-  const nameTolerance = parseInt(document.getElementById('nameTolerance').value, 10);
-  document.getElementById('nameToleranceVal').textContent = nameTolerance;
+  const nameTolerancePct = parseInt(document.getElementById('nameTolerance').value, 10);
+  const nameTolerance = nameTolerancePct / 100;
+  document.getElementById('nameToleranceVal').textContent = nameTolerancePct + '%';
+  // Live read-out of where each slider's red (substantially different) bar
+  // now sits, derived from the same k multipliers the classifier uses.
+  const capPct = v => v > 100 ? 'never' : Math.round(v * 10) / 10 + '%';
+  document.getElementById('nameSubstVal').textContent = capPct(nameTolerancePct * SUBSTANTIAL_K.name);
+  document.getElementById('dateSubstVal').textContent = (dateToleranceDays * SUBSTANTIAL_K.date) + ' days';
+  document.getElementById('locationSubstVal').textContent = capPct(locationTolerancePct * SUBSTANTIAL_K.location);
 
   // Five mutually-exclusive counters, one per status colour — together they
   // ARE the legend now, so the summary boxes can replace it outright instead
@@ -2566,14 +2729,14 @@ function renderReport() {
       category = 'missing';
     } else {
       // status is 'both' or 'maybe'
-      const hasDiff = rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays);
+      const hasDiff = rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance);
       // Exactly one of these four buckets, matching computeSectionStatus's
       // own red > amber > similar/exact precedence for a single row.
-      if (rowSubstantiallyDifferent(row, nameTolerance)) {
+      if (rowSubstantiallyDifferent(row, nameTolerance, dateToleranceDays, locationThreshold)) {
         category = 'substantial'; totalSubstantialDiffs++;
       } else if (row.status === 'maybe' || hasDiff) {
         category = 'diffs'; totalNeedsVerification++;
-      } else if (matchExactness(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays) === 'exact') {
+      } else if (matchExactness(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance) === 'exact') {
         category = 'exact'; totalExact++;
       } else {
         category = 'similar'; totalSimilar++;
@@ -2691,11 +2854,11 @@ function renderReport() {
     for (const row of section.rows) {
       const isReviewed = reviewedIds.has(personKey(row));
       const yearsSuffix = matchYearsSuffix(row);
-      const substantiallyDifferent = rowSubstantiallyDifferent(row, nameTolerance);
+      const substantiallyDifferent = rowSubstantiallyDifferent(row, nameTolerance, dateToleranceDays, locationThreshold);
       // Only a clean 'both' match (no substantial difference, no effective
       // diff) has a meaningful exactness to show on its badge.
-      const exactness = (row.status === 'both' && !substantiallyDifferent && !rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays))
-        ? matchExactness(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays)
+      const exactness = (row.status === 'both' && !substantiallyDifferent && !rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance))
+        ? matchExactness(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance)
         : null;
       // Flat mode has no bordered match-card beneath the header — just the
       // attributes, laid directly under it — since the header IS this row.
@@ -2727,7 +2890,7 @@ function renderReport() {
       if (row.fieldDiffs) {
         html += `<table style="border:none;">`;
         for (const f of row.fieldDiffs) {
-          html += `<tr style="border:none;"><td style="border:none;padding:2px 8px 2px 0;color:var(--muted);white-space:nowrap;">${esc(f.label)}</td><td style="border:none;padding:2px 0;">${renderValueCell(f, ignoreSimilarLocations, locationThreshold, dateToleranceDays)}</td></tr>`;
+          html += `<tr style="border:none;"><td style="border:none;padding:2px 8px 2px 0;color:var(--muted);white-space:nowrap;">${esc(f.label)}</td><td style="border:none;padding:2px 0;">${renderValueCell(f, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance)}</td></tr>`;
         }
         html += `</table>`;
       } else {
