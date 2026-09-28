@@ -18,7 +18,7 @@ Matches are then shown with options to hide/show details as required based on yo
 
 ###### In Progress
 
-* Push a match of "abt 1900" and "1900" from similar to different when date similarity = 0
+* None
 
 
 
@@ -34,16 +34,6 @@ Matches are then shown with options to hide/show details as required based on yo
 * how far back range
 * does descendants go all the way down tree branches?
 * optionally apply date \& location similarity checks to marriage and death
-
-
-
-
-
-
-
-
-
-
-
-
+* chevron to collapse settings panels
+* ensure all options can be saved
 
