@@ -423,6 +423,19 @@ v47 - Added "distance from root person" to every match: shown in each
       descendantDepthFromRole()/distanceText() helpers; each row gets a
       `distance` field after the comparison is built. relationshipInfo() is
       unchanged.
+v48 - Added an "Only show people within N generations of the root" filter
+      to the Display settings (checkbox, on by default, N defaults to 7;
+      blank N = no limit). "Generation" is the same figure shown in each
+      section header (0 = root's own section, 1 = parents, 2 =
+      grandparents, ...), so a section is kept when its generation is at
+      most N, and the siblings, spouses and descendants listed under that
+      ancestor are kept or dropped with it. Like the Father's/Mother's side
+      filter (and unlike the purely cosmetic filters) it is a real scope
+      reduction, so the summary counts shrink to match; it works the same
+      in grouped and flat layouts and is live. It stacks with the
+      "Generations back" setting used at compare time (which decides how
+      far the comparison walks in the first place) - with the defaults
+      (6 back, show within 7) it changes nothing.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -853,6 +866,12 @@ v47 - Added "distance from root person" to every match: shown in each
         <option value="both" selected>Both sides</option>
         <option value="mother">Mother's side</option>
       </select>
+    </div>
+    <div>
+      <input type="checkbox" id="limitGenerations" checked onchange="onFilterChange()" />
+      <label for="limitGenerations">Only show people within</label>
+      <input type="number" id="generationLimit" value="7" min="0" max="12" style="width:64px;margin-top:0;" oninput="onFilterChange()" />
+      <label for="generationLimit">generations of the root</label>
     </div>
     <div>
       <input type="checkbox" id="ignoreLikelyAlive" checked onchange="onFilterChange()" />
@@ -2722,12 +2741,24 @@ function sideVisible(code, sideFilter) {
   return side === sideFilter;
 }
 
+// "Only show people within N generations": a section is kept when its
+// generation (lineage-code length: 0 = root's own section, 1 = parents,
+// 2 = grandparents, ...) is at most N. Everyone listed under an ancestor
+// (siblings, spouses, descendants) shares that ancestor's section, so they
+// are kept or dropped with it. A blank/invalid N means no limit.
+function generationVisible(gen, limitOn, maxGenerationsShown) {
+  if (!limitOn || isNaN(maxGenerationsShown)) return true;
+  return gen <= maxGenerationsShown;
+}
+
 function renderReport() {
   if (!lastSections) return;
   const el = document.getElementById('report');
 
   const groupByAncestor = document.getElementById('groupByAncestor').checked;
   const sideFilter = document.getElementById('sideFilter').value;
+  const limitGenerations = document.getElementById('limitGenerations').checked;
+  const maxGenerationsShown = parseInt(document.getElementById('generationLimit').value, 10);
   const hideReviewedItems = document.getElementById('hideReviewedItems').checked;
   const ignoreLikelyAlive = document.getElementById('ignoreLikelyAlive').checked;
   const hideNoBirthDate = document.getElementById('hideNoBirthDate').checked;
@@ -2844,6 +2875,7 @@ function renderReport() {
   if (groupByAncestor) {
     for (const section of lastSections) {
       if (!sideVisible(section.code, sideFilter)) continue;
+      if (!generationVisible(section.code.length, limitGenerations, maxGenerationsShown)) continue;
       const visibleRows = [];
       for (const row of section.rows) {
         const kept = evaluateRow(row);
@@ -2861,6 +2893,7 @@ function renderReport() {
   } else {
     for (const section of lastSections) {
       if (!sideVisible(section.code, sideFilter)) continue;
+      if (!generationVisible(section.code.length, limitGenerations, maxGenerationsShown)) continue;
       for (const row of section.rows) {
         const kept = evaluateRow(row);
         if (!kept) continue;

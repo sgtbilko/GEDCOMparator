@@ -18,13 +18,13 @@ Matches are then shown with options to hide/show details as required based on yo
 
 ###### In Progress
 
-* hide/show based steps from root
+* Check nearest wikitree button logic really is closest - currently grandchild?
 
 
 
 ###### Not Started
 
-* Check nearest wikitree button logic really is closest - currently grandchild?
+* generations to show includes 8 when set to 7 because it is based on ancestor, not those within ancestor.  Perhaps change to no longer group, or apply grouping after (major refactoring)
 * Amend remaining hide/show options into "ignore" (no dob, likely alive, reviewed), "ui" (group, collapse)
 * Check after/before/about logic and tolerance
 * remember options
