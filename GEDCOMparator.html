@@ -399,6 +399,16 @@ v45 - No functional change: records an explicit design decision about the
       Abt even for tolerance (would show amber), or as exact synonyms of Abt.
       Revisit only if real files use Cal/Est often enough to make the
       current behaviour noisy.
+v46 - "Anonymous" is now also a trigger for the "likely still alive" check
+      (used by "Hide people likely still alive", the section-status
+      excusal, and the "(possibly still living)" note). A person whose
+      recorded name contains the whole word "Anonymous" (case-insensitive;
+      e.g. "Anonymous", "Anonymous Smith", "Mary /Anonymous/") is treated
+      as likely alive whether or not they have a birth date or the age
+      slider would otherwise include them — unless a death date is recorded
+      on either side, which always overrides. For a matched pair, either
+      file's name being Anonymous is enough. New isAnonymousName()/
+      rowIsAnonymous() helpers; isLikelyAlive() otherwise unchanged.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -2289,11 +2299,30 @@ function combinedLifeDates(indA, indB) {
   return { birthDate, deathDate };
 }
 
-// A person is treated as "likely still alive" only when we have a birth year,
-// there's no recorded death (on either side, for a matched pair), and that birth
-// year is within the given number of years.
+// True when a recorded name is the placeholder "Anonymous" (case-insensitive,
+// as a whole word anywhere in the name — e.g. "Anonymous", "Anonymous Smith",
+// "Mary /Anonymous/"). Such an entry has no real identity to compare against,
+// so it is treated like a person of unknown age who may well still be living.
+function isAnonymousName(name) {
+  return normalizeName(name).split(' ').includes('anonymous');
+}
+
+// A row counts as anonymous if its display name, or either side's recorded
+// name (for a matched pair), is the "Anonymous" placeholder.
+function rowIsAnonymous(row) {
+  if (isAnonymousName(row.name)) return true;
+  return !!((row.nameA && isAnonymousName(row.nameA.full)) || (row.nameB && isAnonymousName(row.nameB.full)));
+}
+
+// A person is treated as "likely still alive" when there's no recorded death
+// (on either side, for a matched pair) AND either:
+//  - the name is "Anonymous" — no birth date needed, since the placeholder
+//    name is itself the trigger; or
+//  - we have a birth year and it is within the given number of years.
+// A recorded death date always wins over both.
 function isLikelyAlive(row, maxYears) {
   if (normVal(row.deathDate)) return false;
+  if (rowIsAnonymous(row)) return true;
   const yr = extractYear(row.birthDate);
   if (!yr) return false;
   const age = new Date().getFullYear() - parseInt(yr, 10);
