@@ -436,6 +436,24 @@ v48 - Added an "Only show people within N generations of the root" filter
       "Generations back" setting used at compare time (which decides how
       far the comparison walks in the first place) - with the defaults
       (6 back, show within 7) it changes nothing.
+v49 - Fixed the "Nearest WikiTree" preference order. It used to be one
+      breadth-first search where every link (parent, child, sibling, spouse)
+      counted as a step, so a sibling (2 steps via a shared parent) tied with
+      grandparents and grandchildren and could win, and a sibling always
+      beat a great-grandparent. Now the search runs in two phases: first the
+      DIRECT LINE only - children/parents, then grandchildren/grandparents,
+      and so on outward (up to 12 generations), each generation gap checked
+      across both files, descendants ahead of ancestors at the same gap -
+      and only if nobody in the direct line has a WikiTree link does it fall
+      back to the old any-relation search (siblings, in-laws, cousins; blood
+      ahead of marriage at an equal distance). Order: children/parents, then
+      a spouse, then the rest of the direct line (grandparents/grandchildren
+      and further), then everyone else. New
+      findNearestDirectLineWikiTreeUrl(); the previous BFS body is kept
+      unchanged as findNearestWikiTreeUrlAnyRelation(), and
+      findNearestWikiTreeUrl() is now a wrapper that sequences them, so its
+      signature and callers are unchanged. A spouse ranks below a
+      parent/child but above a grandparent/grandchild.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -1230,7 +1248,7 @@ function firstWikiTreeUrl(candidates) {
   return null;
 }
 
-// How far out the BFS is willing to search. Generous — covers everything
+// How far out the general (phase 2) BFS is willing to search. Generous — covers everything
 // from siblings and grandparents out to great-great-grandchildren and
 // several flavours of in-law — but still bounded, since an unbounded search
 // with nobody anywhere having a WikiTree link would otherwise walk every
@@ -1238,7 +1256,88 @@ function firstWikiTreeUrl(candidates) {
 // missing a link.
 const NEAREST_WIKITREE_MAX_DEPTH = 8;
 
+// Phase 1 of the nearest-WikiTree search: the DIRECT LINE only — descendants
+// and ancestors of the person, by generation gap. At gap 1 that is children
+// and parents; at gap 2 grandchildren and grandparents; and so on. Within a
+// gap, descendants are checked ahead of ancestors (the long-standing "a child
+// before a parent" order), and each gap is checked across BOTH files before
+// going one generation further. Ancestors follow the first recorded parent
+// family only (same as getParents). Deliberately goes further out than the
+// general search below (NEAREST_WIKITREE_DIRECT_LINE_MAX_DEPTH vs
+// NEAREST_WIKITREE_MAX_DEPTH), because a distant direct relative is still
+// preferred over a close sibling.
+const NEAREST_WIKITREE_DIRECT_LINE_MAX_DEPTH = 12;
+
+// fromGap/toGap restrict which generation gaps are actually CHECKED (the walk
+// always starts from the person, so gaps before fromGap are still traversed).
+function findNearestDirectLineWikiTreeUrl(dataA, dataB, aId, bId, fromGap, toGap) {
+  const lo = fromGap || 1;
+  const hi = Math.min(toGap || NEAREST_WIKITREE_DIRECT_LINE_MAX_DEPTH, NEAREST_WIKITREE_DIRECT_LINE_MAX_DEPTH);
+  const seen = { A: new Set(aId ? [aId] : []), B: new Set(bId ? [bId] : []) };
+  const dataOf = { A: dataA, B: dataB };
+  const otherOf = { A: dataB, B: dataA };
+  let down = [], up = [];
+  if (aId) { down.push({ id: aId, file: 'A' }); up.push({ id: aId, file: 'A' }); }
+  if (bId) { down.push({ id: bId, file: 'B' }); up.push({ id: bId, file: 'B' }); }
+
+  for (let gap = 1; gap <= hi && (down.length || up.length); gap++) {
+    const nextDown = [], nextUp = [];
+    const downCandidates = [], upCandidates = [];
+
+    for (const node of down) {
+      const data = dataOf[node.file];
+      for (const cid of getChildren(data, node.id)) {
+        if (seen[node.file].has(cid)) continue;
+        seen[node.file].add(cid);
+        nextDown.push({ id: cid, file: node.file });
+        downCandidates.push({ ind: data.individuals[cid], other: otherOf[node.file] });
+      }
+    }
+    for (const node of up) {
+      const data = dataOf[node.file];
+      const { father, mother } = getParents(data, node.id);
+      for (const pid of [father, mother]) {
+        if (!pid || !data.individuals[pid] || seen[node.file].has(pid)) continue;
+        seen[node.file].add(pid);
+        nextUp.push({ id: pid, file: node.file });
+        upCandidates.push({ ind: data.individuals[pid], other: otherOf[node.file] });
+      }
+    }
+
+    if (gap >= lo) {
+      const url = firstWikiTreeUrl(downCandidates) || firstWikiTreeUrl(upCandidates);
+      if (url) return url;
+    }
+    down = nextDown;
+    up = nextUp;
+  }
+  return null;
+}
+
+// Preference order:
+//   (1) children and parents;
+//   (2) a spouse (either file);
+//   (3) the rest of the direct line — grandchildren/grandparents, then
+//       great-grandchildren/great-grandparents, and so on outward, however far;
+//   (4) everyone else by fewest steps (siblings, in-laws, cousins, ...).
+// Siblings and other collateral relatives are therefore only used when nobody
+// in the direct line, and no spouse, has a WikiTree link.
 function findNearestWikiTreeUrl(dataA, dataB, aId, bId) {
+  const parentsAndChildren = findNearestDirectLineWikiTreeUrl(dataA, dataB, aId, bId, 1, 1);
+  if (parentsAndChildren) return parentsAndChildren;
+
+  const spouseCandidates = [];
+  if (aId) spouseCandidates.push(...getSpousesWithMarriage(dataA, aId).map(s => ({ ind: dataA.individuals[s.spouseId], other: dataB })));
+  if (bId) spouseCandidates.push(...getSpousesWithMarriage(dataB, bId).map(s => ({ ind: dataB.individuals[s.spouseId], other: dataA })));
+  const spouse = firstWikiTreeUrl(spouseCandidates);
+  if (spouse) return spouse;
+
+  return findNearestDirectLineWikiTreeUrl(dataA, dataB, aId, bId, 2) ||
+         findNearestWikiTreeUrlAnyRelation(dataA, dataB, aId, bId);
+}
+
+// Phase 2: a plain breadth-first search over ALL relation types.
+function findNearestWikiTreeUrlAnyRelation(dataA, dataB, aId, bId) {
   // Each BFS frontier entry is { id, file }, tracking which file's graph it
   // belongs to (the two files' graphs are walked in lockstep but are never
   // fused into one — matchLists()/findCounterpartInOtherFile()'s per-

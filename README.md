@@ -18,7 +18,7 @@ Matches are then shown with options to hide/show details as required based on yo
 
 ###### In Progress
 
-* Check nearest wikitree button logic really is closest - currently grandchild?
+* does descendants go all the way down tree branches?
 
 
 
@@ -26,8 +26,6 @@ Matches are then shown with options to hide/show details as required based on yo
 
 * generations to show includes 8 when set to 7 because it is based on ancestor, not those within ancestor.  Perhaps change to no longer group, or apply grouping after (major refactoring)
 * Amend remaining hide/show options into "ignore" (no dob, likely alive, reviewed), "ui" (group, collapse)
-* Check after/before/about logic and tolerance
-* remember options
 * does descendants go all the way down tree branches?
 * optionally apply date \& location similarity checks to marriage and death
 * chevron to collapse settings panels
