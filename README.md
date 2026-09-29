@@ -18,19 +18,16 @@ Matches are then shown with options to hide/show details as required based on yo
 
 ###### In Progress
 
-* show steps from root person
-* 
+* hide/show based steps from root
 
 
 
 ###### Not Started
 
-* hide/show based steps from root
 * Check nearest wikitree button logic really is closest - currently grandchild?
 * Amend remaining hide/show options into "ignore" (no dob, likely alive, reviewed), "ui" (group, collapse)
 * Check after/before/about logic and tolerance
 * remember options
-* how far back range
 * does descendants go all the way down tree branches?
 * optionally apply date \& location similarity checks to marriage and death
 * chevron to collapse settings panels

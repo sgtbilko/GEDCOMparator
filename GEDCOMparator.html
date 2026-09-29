@@ -409,6 +409,20 @@ v46 - "Anonymous" is now also a trigger for the "likely still alive" check
       on either side, which always overrides. For a matched pair, either
       file's name being Anonymous is enough. New isAnonymousName()/
       rowIsAnonymous() helpers; isLikelyAlive() otherwise unchanged.
+v47 - Added "distance from root person" to every match: shown in each
+      section header alongside "generation N" (grouped mode), beside the
+      role in each flat-mode header, and as a small tag on every non-ancestor
+      card in grouped mode. Distance counts family-tree steps where parent/
+      child, spouse and SIBLING links each count as ONE step, so siblings
+      are 1 step apart (not 2 via a shared parent), an aunt/uncle is 2, and
+      a half-sibling found via "children of ancestors" is 1. Ancestor at
+      generation L = L; sibling or spouse of that ancestor = L+1; sibling's
+      spouse = L+2; descendant at depth d = d for the root's own section,
+      else L+d-1 (the ancestor's children are siblings of the lineage person
+      one step nearer the root). New distanceFromRoot()/
+      descendantDepthFromRole()/distanceText() helpers; each row gets a
+      `distance` field after the comparison is built. relationshipInfo() is
+      unchanged.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -1528,6 +1542,41 @@ function relationshipInfo(role, code, depth, sex) {
   return { relationshipTerm: capitalize(term), pathDescription: isRootSection ? role.toLowerCase() : `${pathLower}'s ${role.toLowerCase()}` };
 }
 
+// ---------- Distance from root person ----------
+// Number of family-tree steps from the root person to a row's individual,
+// where every parent/child, spouse AND sibling link counts as ONE step. In
+// particular siblings are 1 step from each other (not 2, as it would be going
+// up to a shared parent and back down), which also makes an aunt/uncle 2 steps
+// from the root (parent = 1, then that parent's sibling = 1), a half-sibling 1
+// step, and so on. L = lineage-code length of the section (0 = root's own).
+//  - Ancestor: L.
+//  - Sibling / Spouse of the ancestor at L: L + 1.
+//  - Sibling's spouse: L + 2.
+//  - Descendant at depth d below the ancestor at L: for L = 0 it is simply d;
+//    for L >= 1 the ancestor's children are siblings (full or half) of the
+//    lineage person one generation nearer the root, so the sibling shortcut
+//    applies and the distance is L + d - 1.
+function descendantDepthFromRole(role) {
+  if (role === 'Child') return 1;
+  const m = String(role).match(/^(?:great-)*grandchild$/i);
+  if (!m) return null;
+  return 2 + (role.match(/great-/gi) || []).length;
+}
+
+function distanceFromRoot(role, code) {
+  const L = code.length;
+  if (role === 'Ancestor') return L;
+  if (role === 'Sibling' || role === 'Spouse') return L + 1;
+  if (role === "Sibling's spouse") return L + 2;
+  const d = descendantDepthFromRole(role);
+  if (d === null) return null;
+  return L === 0 ? d : L + d - 1;
+}
+
+function distanceText(row) {
+  return row.distance === null || row.distance === undefined ? '' : `distance ${row.distance}`;
+}
+
 // ---------- Matching helpers ----------
 
 function normalizeName(name) {
@@ -2255,6 +2304,11 @@ function runCompare() {
     sections.push({ code, label: lineageLabel(code), gen: code.length, rows, ancestorHeader });
   }
 
+  // Distance from the root person (see distanceFromRoot) for every row.
+  for (const section of sections) {
+    for (const row of section.rows) row.distance = distanceFromRoot(row.role, section.code);
+  }
+
   // For anyone who doesn't already have their own WikiTree link, find the
   // closest relative's WikiTree link to offer as a "Nearest WikiTree" fallback.
   for (const section of sections) {
@@ -2862,8 +2916,8 @@ function renderReport() {
     // show the row's own role instead, since "generation N" alone wouldn't
     // distinguish a "Sibling" row from a "Spouse" row once nothing is grouped.
     const headerRight = section.flat
-      ? esc(ah.role)
-      : `generation ${section.gen}<span class="section-collapsed-count">· ${section.rows.length} ${section.rows.length === 1 ? 'entry' : 'entries'} hidden</span>`;
+      ? esc(ah.role) + (distanceText(ah) ? ` · ${distanceText(ah)}` : '')
+      : `generation ${section.gen} · ${distanceText(ah)}<span class="section-collapsed-count">· ${section.rows.length} ${section.rows.length === 1 ? 'entry' : 'entries'} hidden</span>`;
     html += `<div class="section${isCollapsed ? ' section-collapsed' : ''}${section.flat ? ' section-flat' : ''}">
       <div class="section-head status-${section.status}">
         <div class="section-head-left">
@@ -2899,6 +2953,7 @@ function renderReport() {
           <div class="match-card-topline-left">
             <span class="role-tag">${esc(row.role)}</span>
             ${statusBadge(row.status, substantiallyDifferent, exactness)}
+            ${(!section.flat && row.role !== 'Ancestor' && distanceText(row)) ? `<span class="role-tag">${distanceText(row)}</span>` : ''}
           </div>
           <label class="reviewed-inline">
             <input type="checkbox" ${isReviewed ? 'checked' : ''} onchange="toggleReviewed('${personKey(row).replace(/'/g, "\\'")}', this.checked)" />
