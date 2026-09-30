@@ -18,7 +18,7 @@ Matches are then shown with options to hide/show details as required based on yo
 
 ###### In Progress
 
-* does descendants go all the way down tree branches?
+* fix generations shown
 
 
 
@@ -26,10 +26,9 @@ Matches are then shown with options to hide/show details as required based on yo
 
 * generations to show includes 8 when set to 7 because it is based on ancestor, not those within ancestor.  Perhaps change to no longer group, or apply grouping after (major refactoring)
 * Amend remaining hide/show options into "ignore" (no dob, likely alive, reviewed), "ui" (group, collapse)
-* does descendants go all the way down tree branches?
 * optionally apply date \& location similarity checks to marriage and death
 * chevron to collapse settings panels
 * ensure all options can be saved
 * Find a way to add a link to ancestry pages (probably not possible)
-* 
+* add name filter
 

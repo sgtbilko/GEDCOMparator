@@ -454,6 +454,56 @@ v49 - Fixed the "Nearest WikiTree" preference order. It used to be one
       findNearestWikiTreeUrl() is now a wrapper that sequences them, so its
       signature and callers are unchanged. A spouse ranks below a
       parent/child but above a grandparent/grandchild.
+v50 - Made the "Descendant generations" walk genuinely exhaustive. Four gaps
+      fixed (all in runCompare's descendant walk):
+      1. DEPTH: the box now takes the same range as "Generations back"
+         (0-12, where 0 = off; it was 0-6). There is deliberately no
+         "unlimited" option. Every walk carries a visited-set (one per file,
+         fresh per ancestor section) so a looped or pedigree-collapsed tree
+         can never recurse forever or list a person twice.
+      2. DESCENDANTS' SPOUSES: every listed descendant's spouse(s) are now
+         listed and compared too, with marriage date/place, matched the same
+         way as ancestors' spouses. Roles read "Child's spouse",
+         "Grandchild's spouse", "Great-grandchild's spouse", ...; a child's
+         spouse is a son-in-law/daughter-in-law and deeper ones read e.g.
+         "Grandchild's wife"; distance is the descendant's distance + 1. A
+         descendant's spouse is not walked further (their other marriages
+         are not descendants of the ancestor). No new toggle: on whenever
+         descendant generations > 0.
+      3. SIBLINGS' SUBTREES: with "Include siblings of ancestors" on, a
+         sibling already listed as a Sibling is no longer a dead end. The
+         parent's descendant walk still lists nothing twice but now walks
+         THROUGH people already shown elsewhere, so an uncle's children and
+         grandchildren appear under the grandparent's section. Direct-line
+         ancestors are never walked through (their own sections do it).
+         Requires the shared parent to be within "Generations back".
+      4. SYMMETRIC COVERAGE: children are now matched across the two files
+         FIRST and de-duplicated afterwards (a pair counts as already shown
+         if either side was). Previously each file's already-shown children
+         were removed before matching, so a person shown on one side only
+         could make their counterpart look falsely "missing".
+      Unchanged: the "half-sibling" label for a same-generation relative
+      found under an immediate parent (L=1, depth=1) - it cannot tell a
+      full sibling from a half-sibling there. New helpers:
+      isDescendantSpouseRole(), descendantSpouseTerm(). Tests added:
+      descendant-drilldown.test.js.
+v51 - "Group results by ancestor" now defaults to OFF: a fresh page opens
+      showing every individual as their own section, and ticking the box
+      switches to the grouped-by-ancestor layout. Only the checkbox's initial
+      state changed; both layouts, the collapse behaviour and all counts are
+      unchanged. Test harness default updated to match.
+v52 - "Generations back" and "Descendant generations" are now dropdowns offering
+      0-9 plus a final "All" (no limit), replacing the 1-12 / 0-12 number
+      boxes. Defaults unchanged (6 back, 0 = descendants off). Generations
+      back may now be 0 (the root alone; previously 0 silently became 6).
+      "All" is Infinity internally (new parseGenerationSetting()). Descendant
+      walks were already cycle-safe (v50 visited-set); buildLineage() gained
+      the matching guard - a path-set, so a person who is their own ancestor
+      in bad data can't recurse forever while genuine pedigree collapse (the
+      same ancestor via two routes) still works. Note the separate display
+      filter "Only show people within N generations of the root" (default 7)
+      is unaffected, so untick it to see beyond 7 generations after choosing
+      All. Tests: generation-options.test.js; older UI assertions updated.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -533,6 +583,7 @@ v49 - Fixed the "Nearest WikiTree" preference order. It used to be one
   .opts-stack-line { display: flex; align-items: center; gap: 8px; }
   .opts-stack-line label { font-size: 13px; color: var(--ink); }
   .opts-stack-line input[type="number"] { width: 70px; margin-top: 0; }
+  .opts-stack-line select.gen-select, .opts-line select.gen-select { width: auto; margin-top: 0; padding: 5px 8px; }
   .opts-stack-line-wrap { flex-direction: column; align-items: flex-start; gap: 4px; }
   .opts-stack-line-wrap .opts-line { display: flex; align-items: center; gap: 8px; }
   .opts-stack-line-wrap .hint { max-width: 480px; }
@@ -814,7 +865,7 @@ v49 - Fixed the "Nearest WikiTree" preference order. It used to be one
     <div class="opts-stack">
       <div class="opts-stack-line">
         <label for="maxGen">Generations back:</label>
-        <input type="number" id="maxGen" value="6" min="1" max="12" />
+        <select id="maxGen" class="gen-select"><option value="0">0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6" selected>6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="all">All</option></select>
       </div>
       <div class="opts-stack-line">
         <input type="checkbox" id="includeAncestorSpouses" checked />
@@ -831,9 +882,9 @@ v49 - Fixed the "Nearest WikiTree" preference order. It used to be one
       <div class="opts-stack-line opts-stack-line-wrap">
         <div class="opts-line">
           <label for="descendantGen">Descendant generations (children of ancestors):</label>
-          <input type="number" id="descendantGen" value="0" min="0" max="6" />
+          <select id="descendantGen" class="gen-select"><option value="0" selected>0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option><option value="9">9</option><option value="all">All</option></select>
         </div>
-        <div class="hint">0 = off. Applies to direct-line ancestors only (root, parents, grandparents, …) — catches their children from any marriage, including half-siblings not shared with the direct line.</div>
+        <div class="hint">0 = off; otherwise 1–9 generations, or All (no limit). Applies to direct-line ancestors only (root, parents, grandparents, …) — walks all of their descendants that many generations down, from every marriage, including half-siblings, their spouses (with marriage details), and, when siblings are included, siblings' children and grandchildren.</div>
       </div>
     </div>
     <button class="primary" id="compareBtn" onclick="runCompare()">Compare trees</button>
@@ -870,7 +921,7 @@ v49 - Fixed the "Nearest WikiTree" preference order. It used to be one
   <div class="report-controls" id="reportControls" style="display:none;">
     <h2 style="flex-basis:100%;margin:0 0 4px;font-size:15px;">4. Display settings</h2>
     <div>
-      <input type="checkbox" id="groupByAncestor" checked onchange="onGroupByAncestorChange()" />
+      <input type="checkbox" id="groupByAncestor" onchange="onGroupByAncestorChange()" />
       <label for="groupByAncestor">Group results by ancestor</label>
     </div>
     <div>
@@ -1460,15 +1511,32 @@ function descendantLabel(genIndex) {
   return 'Great-' + 'great-'.repeat(genIndex - 3) + 'grandchild';
 }
 
+// Reads a "Generations back" / "Descendant generations" dropdown: a whole
+// number 0-9, or "all" meaning no limit (Infinity). Anything unreadable falls
+// back to the given default.
+function parseGenerationSetting(raw, fallback) {
+  const v = String(raw == null ? '' : raw).trim().toLowerCase();
+  if (v === 'all') return Infinity;
+  const n = parseInt(v, 10);
+  return isNaN(n) || n < 0 ? fallback : n;
+}
+
+// maxGen may be Infinity ("All"). The path guard stops a person who turns out
+// to be their own ancestor (bad data) from recursing forever; the same person
+// reached by two different routes (pedigree collapse) is still fine, and just
+// appears under each lineage code, as before.
 function buildLineage(data, rootId, maxGen) {
   const nodes = {}; // code -> indiId
+  const path = new Set();
   function recurse(indiId, code, gen) {
-    if (!data.individuals[indiId]) return;
+    if (!data.individuals[indiId] || path.has(indiId)) return;
     nodes[code] = indiId;
     if (gen >= maxGen) return;
+    path.add(indiId);
     const { father, mother } = getParents(data, indiId);
     if (father) recurse(father, code + 'F', gen + 1);
     if (mother) recurse(mother, code + 'M', gen + 1);
+    path.delete(indiId);
   }
   recurse(rootId, '', 0);
   return nodes;
@@ -1651,6 +1719,12 @@ function relationshipInfo(role, code, depth, sex) {
     const term = isRootSection ? spouseTerm(sex) : stepAncestorTerm(L, sex);
     return { relationshipTerm: capitalize(term), pathDescription: isRootSection ? 'spouse' : `${pathLower}'s spouse` };
   }
+  // A descendant's spouse ('Child's spouse', 'Grandchild's spouse', ...): the
+  // spouse of someone reached through the descendant walk, at that depth.
+  if (isDescendantSpouseRole(role)) {
+    const term = descendantSpouseTerm(L, depth, sex);
+    return { relationshipTerm: capitalize(term), pathDescription: isRootSection ? role.toLowerCase() : `${pathLower}'s ${role.toLowerCase()}` };
+  }
   // Descendant roles ('Child', 'Grandchild', ...). half only applies to the one
   // ambiguous case the "children of ancestors" option can surface: a same-
   // generation relative (L === 1, depth === 1) found via that option rather
@@ -1658,6 +1732,25 @@ function relationshipInfo(role, code, depth, sex) {
   const half = (L === 1 && depth === 1);
   const term = relationshipFromUV(L, depth, sex, half);
   return { relationshipTerm: capitalize(term), pathDescription: isRootSection ? role.toLowerCase() : `${pathLower}'s ${role.toLowerCase()}` };
+}
+
+// "Child's spouse", "Grandchild's spouse", "Great-grandchild's spouse", ...
+// (but not "Sibling's spouse", which is a different relationship).
+function isDescendantSpouseRole(role) {
+  const m = String(role).match(/^(.*)'s spouse$/);
+  return !!m && descendantDepthFromRole(m[1]) !== null;
+}
+
+// Kinship term for a descendant's spouse. L = lineage-code length of the
+// section, depth = the descendant's depth below that ancestor. A root's own
+// child's spouse is a son-/daughter-in-law; anything else is written as
+// "<the descendant's term>'s husband/wife/spouse" (e.g. "Grandchild's wife",
+// "Half-sibling's husband"), since English has no single word for it.
+function descendantSpouseTerm(L, depth, sex) {
+  const known = sex === 'M' || sex === 'F';
+  if (L === 0 && depth === 1) return known ? (sex === 'M' ? 'son-in-law' : 'daughter-in-law') : 'child-in-law';
+  const half = (L === 1 && depth === 1);
+  return `${relationshipFromUV(L, depth, '', half)}'s ${spouseTerm(sex)}`;
 }
 
 // ---------- Distance from root person ----------
@@ -1686,6 +1779,10 @@ function distanceFromRoot(role, code) {
   if (role === 'Ancestor') return L;
   if (role === 'Sibling' || role === 'Spouse') return L + 1;
   if (role === "Sibling's spouse") return L + 2;
+  if (isDescendantSpouseRole(role)) {
+    const inner = distanceFromRoot(String(role).replace(/'s spouse$/, ''), code);
+    return inner === null ? null : inner + 1;
+  }
   const d = descendantDepthFromRole(role);
   if (d === null) return null;
   return L === 0 ? d : L + d - 1;
@@ -2184,7 +2281,7 @@ function renderValueCell(f, ignoreSimilarLocations, locationThreshold, dateToler
 function runCompare() {
   const rootA = document.getElementById('rootA').value;
   const rootB = document.getElementById('rootB').value;
-  const maxGen = parseInt(document.getElementById('maxGen').value, 10) || 6;
+  const maxGen = parseGenerationSetting(document.getElementById('maxGen').value, 6);
   const includeAncestorSpouses = document.getElementById('includeAncestorSpouses').checked;
   const includeSiblings = document.getElementById('includeSiblings').checked;
   // "Include spouses of siblings" only ever applies when siblings themselves are
@@ -2192,7 +2289,7 @@ function runCompare() {
   // off, but we also guard it here so runCompare() is correct even if called
   // programmatically (e.g. from the test harness) with an inconsistent state.
   const includeSibSpouses = document.getElementById('includeSibSpouses').checked && includeSiblings;
-  const descendantGen = parseInt(document.getElementById('descendantGen').value, 10) || 0;
+  const descendantGen = parseGenerationSetting(document.getElementById('descendantGen').value, 0);
   // Date tolerance (Similarity settings panel) is read once here, at compare
   // time, purely as the starting point baked into this comparison's
   // fieldDiffs — it's then re-read live on every render (see fieldIsSame in
@@ -2378,44 +2475,117 @@ function runCompare() {
       }
     }
 
-    // --- optionally, descendants (children) of this ancestor, N generations deep ---
+    // --- optionally, descendants of this ancestor, N generations deep ---
+    // Walks every child from every marriage, each child's spouse(s), and on
+    // down. Guarded by a per-file visited-set (fresh for each ancestor section)
+    // so a looped or pedigree-collapsed tree can neither recurse forever nor
+    // list anyone twice.
     if (descendantGen > 0) {
-      addDescendantRows(idA, idB, descendantGen, 1, rows);
+      const visited = { a: new Set(idA ? [idA] : []), b: new Set(idB ? [idB] : []) };
+      addDescendantRows(idA, idB, descendantGen, 1, rows, visited);
     }
 
-    function addDescendantRows(aId, bId, depthRemaining, genIndex, rows) {
+    function addDescendantRows(aId, bId, depthRemaining, genIndex, rows, visited) {
       if (depthRemaining <= 0) return;
       const childrenA = aId ? getChildren(dataA, aId) : [];
       const childrenB = bId ? getChildren(dataB, bId) : [];
-      const candA = childrenA.filter(id => !isAlreadyCovered(id, null));
-      const candB = childrenB.filter(id => !isAlreadyCovered(null, id));
+      // Direct-line ancestors have their own section (and their own descendant
+      // walk), so they are never listed or walked through here. Everyone else
+      // is matched across the two files FIRST and de-duplicated afterwards: a
+      // pair counts as already shown if EITHER side was. (Filtering per file
+      // before matching used to make a person shown on one side only look
+      // falsely "missing" from the other.) People already shown elsewhere -
+      // e.g. as an ancestor's sibling - are not listed again but ARE still
+      // walked through, so their own children and grandchildren aren't lost.
+      const candA = childrenA.filter(id => !ancestorIdsA.has(id));
+      const candB = childrenB.filter(id => !ancestorIdsB.has(id));
       const m = matchLists(dataA, candA.slice(), dataB, candB.slice());
       const label = descendantLabel(genIndex);
 
       for (const pair of m.pairs) {
+        if (visited.a.has(pair.aId) || visited.b.has(pair.bId)) continue;
+        visited.a.add(pair.aId); visited.b.add(pair.bId);
+        const alreadyShown = shownIdsA.has(pair.aId) || shownIdsB.has(pair.bId);
+        if (!alreadyShown) {
+          const indA = dataA.individuals[pair.aId];
+          const indB = dataB.individuals[pair.bId];
+          const fieldDiffs = compareIndividuals(indA, indB, dateToleranceDays);
+          rows.push({
+            role: label, status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full,
+            fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
+            aId: pair.aId, bId: pair.bId, nameA: indA.name, nameB: indB.name,
+            ...relationshipInfo(label, code, genIndex, combinedSex(indA, indB))
+          });
+          markShown(pair.aId, pair.bId);
+          addDescendantSpouseRows(pair.aId, pair.bId, label, genIndex, rows);
+        } else {
+          markShown(pair.aId, pair.bId);
+        }
+        addDescendantRows(pair.aId, pair.bId, depthRemaining - 1, genIndex + 1, rows, visited);
+      }
+      for (const id of m.missingInB) {
+        if (visited.a.has(id)) continue;
+        visited.a.add(id);
+        if (!shownIdsA.has(id)) {
+          totalMissingB++;
+          rows.push({ ...missingRow(label, 'missB', dataA.individuals[id]), ...relationshipInfo(label, code, genIndex, normVal(dataA.individuals[id].sex)) });
+          markShown(id, null);
+          addDescendantSpouseRows(id, null, label, genIndex, rows);
+        }
+        addDescendantRows(id, null, depthRemaining - 1, genIndex + 1, rows, visited);
+      }
+      for (const id of m.missingInA) {
+        if (visited.b.has(id)) continue;
+        visited.b.add(id);
+        if (!shownIdsB.has(id)) {
+          totalMissingA++;
+          rows.push({ ...missingRow(label, 'missA', dataB.individuals[id]), ...relationshipInfo(label, code, genIndex, normVal(dataB.individuals[id].sex)) });
+          markShown(null, id);
+          addDescendantSpouseRows(null, id, label, genIndex, rows);
+        }
+        addDescendantRows(null, id, depthRemaining - 1, genIndex + 1, rows, visited);
+      }
+    }
+
+    // The spouse(s) of one listed descendant, matched across the two files the
+    // same way as an ancestor's spouses and compared including marriage
+    // date/place. Not walked further: a spouse's other marriages and families
+    // are not descendants of the ancestor.
+    function addDescendantSpouseRows(aId, bId, descLabel, genIndex, rows) {
+      const role = `${descLabel}'s spouse`;
+      const spA = aId ? getSpousesWithMarriage(dataA, aId).map(x => x.spouseId) : [];
+      const spB = bId ? getSpousesWithMarriage(dataB, bId).map(x => x.spouseId) : [];
+      const sm = matchLists(dataA, spA.slice(), dataB, spB.slice());
+      for (const pair of sm.pairs) {
+        if (isAlreadyCovered(pair.aId, pair.bId)) continue;
         const indA = dataA.individuals[pair.aId];
         const indB = dataB.individuals[pair.bId];
         const fieldDiffs = compareIndividuals(indA, indB, dateToleranceDays);
+        const famA = aId ? findMarriageFam(dataA, aId, pair.aId) : null;
+        const famB = bId ? findMarriageFam(dataB, bId, pair.bId) : null;
+        const marrA = famA ? famA.marr : { date: '', place: '' };
+        const marrB = famB ? famB.marr : { date: '', place: '' };
+        fieldDiffs.push({ label: 'Marriage date', a: marrA.date, b: marrB.date, same: datesMatch(marrA.date, marrB.date, dateToleranceDays), type: 'date', similarity: datesMatch(marrA.date, marrB.date, dateToleranceDays) ? 1 : 0 });
+        fieldDiffs.push({ label: 'Marriage place', a: marrA.place, b: marrB.place, same: fieldsEqual(marrA.place, marrB.place), type: 'place', similarity: placeSimilarity(marrA.place, marrB.place) });
         rows.push({
-          role: label, status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full,
+          role, status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full,
           fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
           aId: pair.aId, bId: pair.bId, nameA: indA.name, nameB: indB.name,
-          ...relationshipInfo(label, code, genIndex, combinedSex(indA, indB))
+          ...relationshipInfo(role, code, genIndex, combinedSex(indA, indB))
         });
         markShown(pair.aId, pair.bId);
-        addDescendantRows(pair.aId, pair.bId, depthRemaining - 1, genIndex + 1, rows);
       }
-      for (const id of m.missingInB) {
+      for (const id of sm.missingInB) {
+        if (isAlreadyCovered(id, null)) continue;
         totalMissingB++;
-        rows.push({ ...missingRow(label, 'missB', dataA.individuals[id]), ...relationshipInfo(label, code, genIndex, normVal(dataA.individuals[id].sex)) });
+        rows.push({ ...missingRow(role, 'missB', dataA.individuals[id]), ...relationshipInfo(role, code, genIndex, normVal(dataA.individuals[id].sex)) });
         markShown(id, null);
-        addDescendantRows(id, null, depthRemaining - 1, genIndex + 1, rows);
       }
-      for (const id of m.missingInA) {
+      for (const id of sm.missingInA) {
+        if (isAlreadyCovered(null, id)) continue;
         totalMissingA++;
-        rows.push({ ...missingRow(label, 'missA', dataB.individuals[id]), ...relationshipInfo(label, code, genIndex, normVal(dataB.individuals[id].sex)) });
+        rows.push({ ...missingRow(role, 'missA', dataB.individuals[id]), ...relationshipInfo(role, code, genIndex, normVal(dataB.individuals[id].sex)) });
         markShown(null, id);
-        addDescendantRows(null, id, depthRemaining - 1, genIndex + 1, rows);
       }
     }
 
