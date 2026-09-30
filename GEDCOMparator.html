@@ -520,6 +520,29 @@ v53 - The display filter "Only show people within N ..." now measures
       now hide the outermost siblings' spouses (distance 8). New helper
       distanceVisible() replaces generationVisible(). Tests:
       generation-limit.test.js rewritten.
+v54 - "Only show people within N steps of the root" is now a dropdown (1-12
+      plus All, default 7), styled like the "Generations back" dropdowns,
+      replacing the on/off checkbox and number box: All = no limit, which is
+      what unticking the box used to mean (0 is no longer offered). The
+      Similarity settings and Display settings panels each gained a chevron at
+      the top-left of their heading that collapses/expands the panel; both
+      start COLLAPSED. The toggle just flips a CSS class (no re-render), and
+      collapsed panels stay collapsed across "Compare trees" and filter
+      changes. Tests: generation-limit.test.js updated; new panel-collapse.test.js.
+v55 - After "Compare trees" finishes, the page now scrolls so the Similarity
+      settings panel is at the top of the view (which brings the Display
+      settings panel and the summary cards into view beneath it), instead of
+      scrolling to the top of the report itself. Still exactly once per fresh
+      comparison, never on later re-renders. Test: scroll-behavior.test.js.
+v56 - The "In both, similar match" summary card now starts UNticked, so a fresh
+      report hides similar matches by default (like exact matches already
+      did); tick the card to show them. Only the initial value of
+      categoryVisibility changed - counts are unaffected, as hiding a category
+      never changes its own total. Test default in category-toggles updated.
+v57 - The "within N steps of the root" dropdown was stretching to the full
+      width of the Display settings panel (the compact .gen-select rule only
+      covered the compare-settings panel). It now uses the same compact,
+      auto-width styling as the "Generations back" dropdowns.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -599,7 +622,7 @@ v53 - The display filter "Only show people within N ..." now measures
   .opts-stack-line { display: flex; align-items: center; gap: 8px; }
   .opts-stack-line label { font-size: 13px; color: var(--ink); }
   .opts-stack-line input[type="number"] { width: 70px; margin-top: 0; }
-  .opts-stack-line select.gen-select, .opts-line select.gen-select { width: auto; margin-top: 0; padding: 5px 8px; }
+  .opts-stack-line select.gen-select, .opts-line select.gen-select, .report-controls select.gen-select { width: auto; margin-top: 0; padding: 5px 8px; }
   .opts-stack-line-wrap { flex-direction: column; align-items: flex-start; gap: 4px; }
   .opts-stack-line-wrap .opts-line { display: flex; align-items: center; gap: 8px; }
   .opts-stack-line-wrap .hint { max-width: 480px; }
@@ -832,6 +855,15 @@ v53 - The display filter "Only show people within N ..." now measures
   .slider-wrap { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
   .slider-wrap input[type="range"] { width: 100px; margin-top: 0; accent-color: var(--accent); }
   .slider-wrap span#aliveYearsVal, .slider-wrap span#locationThresholdVal { color: var(--ink); font-weight: 600; min-width: 28px; }
+  /* Collapsible settings panels (Similarity / Display): the heading keeps a
+     chevron at its top-left; collapsed (the default) hides everything but it. */
+  .panel-heading { flex-basis: 100%; margin: 0 0 4px; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  .panel-toggle { flex: 0 0 auto; width: 20px; height: 20px; padding: 0; border: none; background: none; color: var(--accent); display: flex; align-items: center; justify-content: center; cursor: pointer; border-radius: 4px; }
+  .panel-toggle:hover { background: rgba(0, 0, 0, 0.06); }
+  .panel-toggle svg { display: block; transform: rotate(90deg); transition: transform 0.15s ease; }
+  .report-controls.panel-collapsed .panel-toggle svg { transform: rotate(0deg); }
+  .report-controls.panel-collapsed > *:not(h2) { display: none !important; }
+  .report-controls.panel-collapsed { row-gap: 0; }
   .row-exact { }
   .row-hidden { display: none !important; }
   .section-hidden { display: none !important; }
@@ -906,8 +938,8 @@ v53 - The display filter "Only show people within N ..." now measures
     <button class="primary" id="compareBtn" onclick="runCompare()">Compare trees</button>
   </div>
 
-  <div class="report-controls" id="reportControlsSimilarity" style="display:none;">
-    <h2 style="flex-basis:100%;margin:0 0 4px;font-size:15px;">3. Similarity settings</h2>
+  <div class="report-controls panel-collapsed" id="reportControlsSimilarity" style="display:none;">
+    <h2 class="panel-heading"><button type="button" class="panel-toggle" onclick="togglePanel(this)" aria-expanded="false" aria-label="Collapse or expand the similarity settings" title="Collapse/expand"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M4 2 L12 8 L4 14" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></button><span>3. Similarity settings</span></h2>
     <div class="opts-stack-line opts-stack-line-wrap">
       <div class="opts-line">
         <label for="nameTolerance">Name tolerance:</label>
@@ -934,8 +966,8 @@ v53 - The display filter "Only show people within N ..." now measures
     </div>
   </div>
 
-  <div class="report-controls" id="reportControls" style="display:none;">
-    <h2 style="flex-basis:100%;margin:0 0 4px;font-size:15px;">4. Display settings</h2>
+  <div class="report-controls panel-collapsed" id="reportControls" style="display:none;">
+    <h2 class="panel-heading"><button type="button" class="panel-toggle" onclick="togglePanel(this)" aria-expanded="false" aria-label="Collapse or expand the display settings" title="Collapse/expand"><svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path d="M4 2 L12 8 L4 14" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/></svg></button><span>4. Display settings</span></h2>
     <div>
       <input type="checkbox" id="groupByAncestor" onchange="onGroupByAncestorChange()" />
       <label for="groupByAncestor">Group results by ancestor</label>
@@ -953,10 +985,9 @@ v53 - The display filter "Only show people within N ..." now measures
       </select>
     </div>
     <div>
-      <input type="checkbox" id="limitGenerations" checked onchange="onFilterChange()" />
-      <label for="limitGenerations">Only show people within</label>
-      <input type="number" id="generationLimit" value="7" min="0" max="12" style="width:64px;margin-top:0;" oninput="onFilterChange()" />
-      <label for="generationLimit" title="Uses the &quot;distance&quot; figure shown on each person: every parent/child, spouse or sibling link counts as one step">steps of the root (as shown by &ldquo;distance&rdquo;)</label>
+      <label for="generationLimit" title="Uses the &quot;distance&quot; figure shown on each person: every parent/child, spouse or sibling link counts as one step">Only show people within</label>
+      <select id="generationLimit" class="gen-select" onchange="onFilterChange()"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7" selected>7</option><option value="8">8</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option><option value="all">All</option></select>
+      <label for="generationLimit">steps of the root (as shown by &ldquo;distance&rdquo;; All = no limit)</label>
     </div>
     <div>
       <input type="checkbox" id="ignoreLikelyAlive" checked onchange="onFilterChange()" />
@@ -2976,6 +3007,15 @@ function onFilterChange() {
   renderReport();
 }
 
+// Collapse/expand one of the settings panels (Similarity / Display). Toggles a
+// CSS class directly - no re-render - so it is instant and keeps scroll position.
+function togglePanel(btnEl) {
+  const panel = btnEl.closest('.report-controls');
+  if (!panel) return;
+  const collapsed = panel.classList.toggle('panel-collapsed');
+  btnEl.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+}
+
 // Per-category show/hide state for the five summary cards (exact, similar,
 // diffs/needs-verification, substantial, missing), replacing the old
 // standalone "Hide exact matches" / "Hide all matches, show only missing" /
@@ -2990,7 +3030,7 @@ function onFilterChange() {
 // A category being hidden never changes its own card's count (see
 // evaluateRow/renderReport below) — exactly like "Hide exact matches"
 // before it, this only changes what's displayed underneath.
-let categoryVisibility = { exact: false, similar: true, diffs: true, substantial: true, missing: true };
+let categoryVisibility = { exact: false, similar: false, diffs: true, substantial: true, missing: true };
 
 // Human-readable singular/plural nouns for the "N hidden" legend line built
 // in renderReport() — mirrors the existing "likely-living person/people"
@@ -3032,9 +3072,9 @@ function sideVisible(code, sideFilter) {
 // listed under. So a sibling of a 3rd-generation ancestor (distance 4) is
 // dropped by N=3 even though it sits in the generation-3 section, while a
 // child of that ancestor (distance 3) stays. A person with no computable
-// distance is kept (we can't judge them), and blank/invalid N = no limit.
-function distanceVisible(row, limitOn, maxDistanceShown) {
-  if (!limitOn || isNaN(maxDistanceShown)) return true;
+// distance is kept (we can't judge them), and "All" (or anything unparseable) = no limit.
+function distanceVisible(row, maxDistanceShown) {
+  if (maxDistanceShown === Infinity || isNaN(maxDistanceShown)) return true;
   if (row.distance === null || row.distance === undefined) return true;
   return row.distance <= maxDistanceShown;
 }
@@ -3045,8 +3085,7 @@ function renderReport() {
 
   const groupByAncestor = document.getElementById('groupByAncestor').checked;
   const sideFilter = document.getElementById('sideFilter').value;
-  const limitGenerations = document.getElementById('limitGenerations').checked;
-  const maxDistanceShown = parseInt(document.getElementById('generationLimit').value, 10);
+  const maxDistanceShown = parseGenerationSetting(document.getElementById('generationLimit').value, Infinity);
   const hideReviewedItems = document.getElementById('hideReviewedItems').checked;
   const ignoreLikelyAlive = document.getElementById('ignoreLikelyAlive').checked;
   const hideNoBirthDate = document.getElementById('hideNoBirthDate').checked;
@@ -3112,7 +3151,7 @@ function renderReport() {
   function evaluateRow(row) {
     // Distance-from-root scope limit: a real scope reduction (like the side
     // filter), applied before anything is counted so the summary shrinks too.
-    if (!distanceVisible(row, limitGenerations, maxDistanceShown)) return null;
+    if (!distanceVisible(row, maxDistanceShown)) return null;
     // A reviewed row is hidden unconditionally (unless "Show reviewed items" is
     // on) — it's excluded before any of the other filter logic even runs, since
     // once reviewed a row is simply done and shouldn't count toward the other stats.
@@ -3175,7 +3214,7 @@ function renderReport() {
         displaySections.push({
           code: section.code, gen: section.gen, rows: visibleRows,
           ancestorHeader: section.ancestorHeader,
-          status: computeSectionStatus({ rows: section.rows.filter(r => distanceVisible(r, limitGenerations, maxDistanceShown)) }, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance),
+          status: computeSectionStatus({ rows: section.rows.filter(r => distanceVisible(r, maxDistanceShown)) }, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance),
           flat: false
         });
       }
@@ -3311,7 +3350,10 @@ function renderReport() {
   el.innerHTML = html;
   el.style.display = 'block';
   if (!hasScrolledToReport) {
-    el.scrollIntoView({ behavior: 'smooth' });
+    // Scroll to the top of the Similarity settings panel (the first thing above
+    // the report), so both settings panels and the summary cards are in view.
+    const anchor = document.getElementById('reportControlsSimilarity') || el;
+    anchor.scrollIntoView({ behavior: 'smooth', block: 'start' });
     hasScrolledToReport = true;
   }
 }

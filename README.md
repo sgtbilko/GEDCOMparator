@@ -18,7 +18,6 @@ Matches are then shown with options to hide/show details as required based on yo
 
 ###### In Progress
 
-* Tweak distance drop down
 * add name filter
 
 
