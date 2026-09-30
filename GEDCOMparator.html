@@ -543,6 +543,16 @@ v57 - The "within N steps of the root" dropdown was stretching to the full
       width of the Display settings panel (the compact .gen-select rule only
       covered the compare-settings panel). It now uses the same compact,
       auto-width styling as the "Generations back" dropdowns.
+v58 - New Display-settings option "Only show people with surname": a text box
+      taking one or more surnames separated by commas/semicolons. Matching is
+      against the WHOLE surname, case-insensitive, punctuation ignored; '*'
+      is a wildcard ("Smi*", "*son"). A matched pair qualifies if either
+      file's surname matches; a missing person is judged on their single
+      surname; anyone with no surname never matches an active filter; blank =
+      no filter. Like the distance limit it is a live scope reduction applied
+      before counting (summary cards shrink) and a grouped section's header
+      colour is computed over in-scope rows only. Rows now carry `surnames`
+      (both sides for matched pairs). Tests: surname-filter.test.js.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -864,6 +874,7 @@ v57 - The "within N steps of the root" dropdown was stretching to the full
   .report-controls.panel-collapsed .panel-toggle svg { transform: rotate(0deg); }
   .report-controls.panel-collapsed > *:not(h2) { display: none !important; }
   .report-controls.panel-collapsed { row-gap: 0; }
+  .report-controls input.surname-input { width: 240px; margin-top: 0; padding: 5px 8px; }
   .row-exact { }
   .row-hidden { display: none !important; }
   .section-hidden { display: none !important; }
@@ -988,6 +999,10 @@ v57 - The "within N steps of the root" dropdown was stretching to the full
       <label for="generationLimit" title="Uses the &quot;distance&quot; figure shown on each person: every parent/child, spouse or sibling link counts as one step">Only show people within</label>
       <select id="generationLimit" class="gen-select" onchange="onFilterChange()"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option><option value="5">5</option><option value="6">6</option><option value="7" selected>7</option><option value="8">8</option><option value="9">9</option><option value="10">10</option><option value="11">11</option><option value="12">12</option><option value="all">All</option></select>
       <label for="generationLimit">steps of the root (as shown by &ldquo;distance&rdquo;; All = no limit)</label>
+    </div>
+    <div>
+      <label for="surnameFilter" title="Comma-separated; case-insensitive; matches the whole surname; * is a wildcard (e.g. Smi*). A matched pair qualifies if either file's surname matches.">Only show people with surname</label>
+      <input type="text" id="surnameFilter" class="surname-input" placeholder="e.g. Smith, Jones or Sm*  (blank = everyone)" oninput="onFilterChange()" autocomplete="off" />
     </div>
     <div>
       <input type="checkbox" id="ignoreLikelyAlive" checked onchange="onFilterChange()" />
@@ -2394,7 +2409,7 @@ function runCompare() {
       const indA = dataA.individuals[idA];
       const indB = dataB.individuals[idB];
       const fieldDiffs = compareIndividuals(indA, indB, dateToleranceDays);
-      rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(), aId: idA, bId: idB, nameA: indA.name, nameB: indB.name, ...relationshipInfo('Ancestor', code, 0, '') });
+      rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(), aId: idA, bId: idB, nameA: indA.name, nameB: indB.name, surnames: [indA.name.surname, indB.name.surname], ...relationshipInfo('Ancestor', code, 0, '') });
       markShown(idA, idB);
     } else if (idA) {
       totalMissingB++;
@@ -2426,7 +2441,7 @@ function runCompare() {
       rows.push({
         role: 'Sibling', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
         name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-        aId: pair.aId, bId: pair.bId, nameA: indA.name, nameB: indB.name,
+        aId: pair.aId, bId: pair.bId, nameA: indA.name, nameB: indB.name, surnames: [indA.name.surname, indB.name.surname],
         ...relationshipInfo('Sibling', code, null, combinedSex(indA, indB))
       });
       markShown(pair.aId, pair.bId);
@@ -2464,7 +2479,7 @@ function runCompare() {
       rows.push({
         role: 'Spouse', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
         name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-        aId: pair.aId, bId: pair.bId, nameA: indA.name, nameB: indB.name,
+        aId: pair.aId, bId: pair.bId, nameA: indA.name, nameB: indB.name, surnames: [indA.name.surname, indB.name.surname],
         ...relationshipInfo('Spouse', code, null, combinedSex(indA, indB))
       });
       markShown(pair.aId, pair.bId);
@@ -2503,7 +2518,7 @@ function runCompare() {
         rows.push({
           role: "Sibling's spouse", status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full,
           fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-          aId: pair.aId, bId: pair.bId, nameA: indA.name, nameB: indB.name,
+          aId: pair.aId, bId: pair.bId, nameA: indA.name, nameB: indB.name, surnames: [indA.name.surname, indB.name.surname],
           ...relationshipInfo("Sibling's spouse", code, null, combinedSex(indA, indB))
         });
         markShown(pair.aId, pair.bId);
@@ -2560,7 +2575,7 @@ function runCompare() {
           rows.push({
             role: label, status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full,
             fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-            aId: pair.aId, bId: pair.bId, nameA: indA.name, nameB: indB.name,
+            aId: pair.aId, bId: pair.bId, nameA: indA.name, nameB: indB.name, surnames: [indA.name.surname, indB.name.surname],
             ...relationshipInfo(label, code, genIndex, combinedSex(indA, indB))
           });
           markShown(pair.aId, pair.bId);
@@ -2617,7 +2632,7 @@ function runCompare() {
         rows.push({
           role, status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full,
           fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-          aId: pair.aId, bId: pair.bId, nameA: indA.name, nameB: indB.name,
+          aId: pair.aId, bId: pair.bId, nameA: indA.name, nameB: indB.name, surnames: [indA.name.surname, indB.name.surname],
           ...relationshipInfo(role, code, genIndex, combinedSex(indA, indB))
         });
         markShown(pair.aId, pair.bId);
@@ -2672,7 +2687,7 @@ function missingRow(role, status, indi) {
   // individual; 'missA' means present in File B, so indi is a B-side individual.
   const isFromA = status === 'missB';
   return {
-    role, status, name: indi.name.full, fieldDiffs: null,
+    role, status, name: indi.name.full, fieldDiffs: null, surnames: [indi.name.surname],
     birthDate: indi.birth.date, deathDate: indi.death.date, links: indi.links || [], id: nextRowId(),
     aId: isFromA ? indi.id : null, bId: isFromA ? null : indi.id
   };
@@ -3073,6 +3088,33 @@ function sideVisible(code, sideFilter) {
 // dropped by N=3 even though it sits in the generation-3 section, while a
 // child of that ancestor (distance 3) stays. A person with no computable
 // distance is kept (we can't judge them), and "All" (or anything unparseable) = no limit.
+// "Only show people with surname ...": the box holds one or more surnames
+// separated by commas or semicolons. Each must equal the person's WHOLE
+// surname (case, punctuation and accents-as-punctuation ignored, via
+// normalizeName); '*' matches any run of letters, so "Smi*" covers Smith and
+// Smithson and "*son" covers Robinson. A matched pair qualifies if EITHER
+// file's surname matches (spelling variants across files are common), and a
+// missing person is judged on the one surname they have. Blank box = no
+// filter (null); someone with no recorded surname never matches an active
+// filter. Like the distance limit this is a scope reduction, applied before
+// anything is counted.
+function parseSurnameFilter(value) {
+  const parts = (value || '').split(/[,;]/).map(p => p.trim()).filter(Boolean);
+  const patterns = [];
+  for (const part of parts) {
+    const norm = part.toLowerCase().replace(/[^a-z\s*]/g, '').replace(/\s+/g, ' ').trim();
+    if (!norm.replace(/\*/g, '')) { if (norm) patterns.push(/^.+$/); continue; } // "*" alone = any surname
+    patterns.push(new RegExp('^' + norm.split('*').map(x => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[a-z ]*') + '$'));
+  }
+  return patterns.length ? patterns : null;
+}
+
+function surnameVisible(row, patterns) {
+  if (!patterns) return true;
+  const names = (row.surnames || []).map(n => normalizeName(n)).filter(Boolean);
+  return names.some(n => patterns.some(re => re.test(n)));
+}
+
 function distanceVisible(row, maxDistanceShown) {
   if (maxDistanceShown === Infinity || isNaN(maxDistanceShown)) return true;
   if (row.distance === null || row.distance === undefined) return true;
@@ -3089,6 +3131,8 @@ function renderReport() {
   const hideReviewedItems = document.getElementById('hideReviewedItems').checked;
   const ignoreLikelyAlive = document.getElementById('ignoreLikelyAlive').checked;
   const hideNoBirthDate = document.getElementById('hideNoBirthDate').checked;
+  const surnamePatterns = parseSurnameFilter(document.getElementById('surnameFilter').value);
+  const inScope = r => distanceVisible(r, maxDistanceShown) && surnameVisible(r, surnamePatterns);
   // "Location tolerance" (Similarity settings) folds the old enable checkbox
   // and threshold slider into one control: 0% behaves exactly like the old
   // checkbox being unchecked (no leniency at all — the "0 = off" convention
@@ -3151,7 +3195,7 @@ function renderReport() {
   function evaluateRow(row) {
     // Distance-from-root scope limit: a real scope reduction (like the side
     // filter), applied before anything is counted so the summary shrinks too.
-    if (!distanceVisible(row, maxDistanceShown)) return null;
+    if (!inScope(row)) return null;
     // A reviewed row is hidden unconditionally (unless "Show reviewed items" is
     // on) — it's excluded before any of the other filter logic even runs, since
     // once reviewed a row is simply done and shouldn't count toward the other stats.
@@ -3214,7 +3258,7 @@ function renderReport() {
         displaySections.push({
           code: section.code, gen: section.gen, rows: visibleRows,
           ancestorHeader: section.ancestorHeader,
-          status: computeSectionStatus({ rows: section.rows.filter(r => distanceVisible(r, maxDistanceShown)) }, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance),
+          status: computeSectionStatus({ rows: section.rows.filter(inScope) }, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance),
           flat: false
         });
       }
