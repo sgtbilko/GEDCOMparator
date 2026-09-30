@@ -18,7 +18,8 @@ Matches are then shown with options to hide/show details as required based on yo
 
 ###### In Progress
 
-* fix generations shown
+* Tweak distance drop down
+* add name filter
 
 
 
@@ -30,5 +31,5 @@ Matches are then shown with options to hide/show details as required based on yo
 * chevron to collapse settings panels
 * ensure all options can be saved
 * Find a way to add a link to ancestry pages (probably not possible)
-* add name filter
+* 
 

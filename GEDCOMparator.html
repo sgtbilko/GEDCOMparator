@@ -504,6 +504,22 @@ v52 - "Generations back" and "Descendant generations" are now dropdowns offering
       filter "Only show people within N generations of the root" (default 7)
       is unaffected, so untick it to see beyond 7 generations after choosing
       All. Tests: generation-options.test.js; older UI assertions updated.
+v53 - The display filter "Only show people within N ..." now measures
+      DISTANCE FROM THE ROOT PERSON (the same "distance" figure shown on
+      every entry: parent/child, spouse and sibling links each count as one
+      step), judged per person, instead of the generation number of the
+      ancestor section they are listed under (v48). Previously N=3 kept a
+      generation-3 ancestor's siblings and spouses (distance 4) and their
+      descendants further out, all because they shared that ancestor's
+      section; now they are dropped individually while the ancestor's
+      children (distance 3) stay. In grouped mode a section's header
+      colour is computed over its in-scope rows only, and summary counts
+      still shrink to the scope. Anyone with no computable distance is
+      kept. Label changed to "steps of the root (as shown by distance)".
+      Default N stays 7, but with the default 6 generations back this can
+      now hide the outermost siblings' spouses (distance 8). New helper
+      distanceVisible() replaces generationVisible(). Tests:
+      generation-limit.test.js rewritten.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -940,7 +956,7 @@ v52 - "Generations back" and "Descendant generations" are now dropdowns offering
       <input type="checkbox" id="limitGenerations" checked onchange="onFilterChange()" />
       <label for="limitGenerations">Only show people within</label>
       <input type="number" id="generationLimit" value="7" min="0" max="12" style="width:64px;margin-top:0;" oninput="onFilterChange()" />
-      <label for="generationLimit">generations of the root</label>
+      <label for="generationLimit" title="Uses the &quot;distance&quot; figure shown on each person: every parent/child, spouse or sibling link counts as one step">steps of the root (as shown by &ldquo;distance&rdquo;)</label>
     </div>
     <div>
       <input type="checkbox" id="ignoreLikelyAlive" checked onchange="onFilterChange()" />
@@ -3010,14 +3026,17 @@ function sideVisible(code, sideFilter) {
   return side === sideFilter;
 }
 
-// "Only show people within N generations": a section is kept when its
-// generation (lineage-code length: 0 = root's own section, 1 = parents,
-// 2 = grandparents, ...) is at most N. Everyone listed under an ancestor
-// (siblings, spouses, descendants) shares that ancestor's section, so they
-// are kept or dropped with it. A blank/invalid N means no limit.
-function generationVisible(gen, limitOn, maxGenerationsShown) {
-  if (!limitOn || isNaN(maxGenerationsShown)) return true;
-  return gen <= maxGenerationsShown;
+// "Only show people within N steps of the root": judged PER PERSON on the
+// same "distance" figure displayed on each entry (see distanceFromRoot) -
+// not on the generation number of the ancestor section they happen to be
+// listed under. So a sibling of a 3rd-generation ancestor (distance 4) is
+// dropped by N=3 even though it sits in the generation-3 section, while a
+// child of that ancestor (distance 3) stays. A person with no computable
+// distance is kept (we can't judge them), and blank/invalid N = no limit.
+function distanceVisible(row, limitOn, maxDistanceShown) {
+  if (!limitOn || isNaN(maxDistanceShown)) return true;
+  if (row.distance === null || row.distance === undefined) return true;
+  return row.distance <= maxDistanceShown;
 }
 
 function renderReport() {
@@ -3027,7 +3046,7 @@ function renderReport() {
   const groupByAncestor = document.getElementById('groupByAncestor').checked;
   const sideFilter = document.getElementById('sideFilter').value;
   const limitGenerations = document.getElementById('limitGenerations').checked;
-  const maxGenerationsShown = parseInt(document.getElementById('generationLimit').value, 10);
+  const maxDistanceShown = parseInt(document.getElementById('generationLimit').value, 10);
   const hideReviewedItems = document.getElementById('hideReviewedItems').checked;
   const ignoreLikelyAlive = document.getElementById('ignoreLikelyAlive').checked;
   const hideNoBirthDate = document.getElementById('hideNoBirthDate').checked;
@@ -3091,6 +3110,9 @@ function renderReport() {
   // if it should be shown, or null if a filter hid it (the relevant hidden-
   // counter has already been bumped either way).
   function evaluateRow(row) {
+    // Distance-from-root scope limit: a real scope reduction (like the side
+    // filter), applied before anything is counted so the summary shrinks too.
+    if (!distanceVisible(row, limitGenerations, maxDistanceShown)) return null;
     // A reviewed row is hidden unconditionally (unless "Show reviewed items" is
     // on) — it's excluded before any of the other filter logic even runs, since
     // once reviewed a row is simply done and shouldn't count toward the other stats.
@@ -3144,7 +3166,6 @@ function renderReport() {
   if (groupByAncestor) {
     for (const section of lastSections) {
       if (!sideVisible(section.code, sideFilter)) continue;
-      if (!generationVisible(section.code.length, limitGenerations, maxGenerationsShown)) continue;
       const visibleRows = [];
       for (const row of section.rows) {
         const kept = evaluateRow(row);
@@ -3154,7 +3175,7 @@ function renderReport() {
         displaySections.push({
           code: section.code, gen: section.gen, rows: visibleRows,
           ancestorHeader: section.ancestorHeader,
-          status: computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance),
+          status: computeSectionStatus({ rows: section.rows.filter(r => distanceVisible(r, limitGenerations, maxDistanceShown)) }, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance),
           flat: false
         });
       }
@@ -3162,7 +3183,6 @@ function renderReport() {
   } else {
     for (const section of lastSections) {
       if (!sideVisible(section.code, sideFilter)) continue;
-      if (!generationVisible(section.code.length, limitGenerations, maxGenerationsShown)) continue;
       for (const row of section.rows) {
         const kept = evaluateRow(row);
         if (!kept) continue;
