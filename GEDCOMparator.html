@@ -553,6 +553,22 @@ v58 - New Display-settings option "Only show people with surname": a text box
       before counting (summary cards shrink) and a grouped section's header
       colour is computed over in-scope rows only. Rows now carry `surnames`
       (both sides for matched pairs). Tests: surname-filter.test.js.
+v59 - Fixed grouped-mode header colours disagreeing with the rows listed under
+      them. A section's header status was computed over every in-scope row,
+      including rows the filters had hidden from the list: a missing person
+      hidden by "Hide people with no date of birth", a matched likely-living
+      person with a recorded difference (hidden by "Hide people likely still
+      alive"), and anything hidden by an unticked summary-card category could
+      all still turn the header amber/red/dark red with nothing visible to
+      explain it. The header is now computed over exactly the rows displayed
+      beneath it (visibleRows). Consequences: unticking a category card (e.g.
+      "Substantial difference") also removes it from the header colour, so the
+      header reflects the worst VISIBLE entry; "Reviewed" rows that are still
+      listed (hide-reviewed off) remain excluded from the colour, as before.
+      Flat mode was already consistent and is unchanged; summary counts are
+      unchanged. computeSectionStatus() itself is unchanged apart from its
+      comment, so direct unit tests of it still hold. Tests:
+      section-status-visible.test.js.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -2824,14 +2840,16 @@ function matchExactness(row, ignoreSimilarLocations, locationThreshold, dateTole
 //  - exact:   everything else — every row is either a genuinely exact match
 //             or has been excused by the person's own settings or
 //             judgement. A deeper green than "similar".
-// A row is skipped entirely (never counted toward any of the above) when:
+// Callers pass ONLY the rows actually displayed under the header (rows hidden
+// by scope limits, the likely-alive / no-birth-date / reviewed filters or a
+// summary-card tickbox are never in the list), so the header colour always
+// matches what the person can see beneath it. As a second line of defence a
+// row is also skipped here (never counted toward any of the above) when:
 //  - it's been individually marked "Reviewed" — the person has looked at it
-//    and dealt with it, regardless of what the "hide reviewed" filter shows;
+//    and dealt with it, even when "hide reviewed items" is off and the row is
+//    still listed;
 //  - it's a missing person excused by "hide people likely still alive";
 //  - it has no birth date and "hide people with no date of birth" is on.
-// These mirror the same settings used to decide what's shown in the report,
-// so the header colour and the report body never disagree about what counts
-// as resolved.
 // Severity ranking for a section's overall status, worst to best.
 const SECTION_STATUS_RANK = { exact: 0, similar: 1, amber: 2, missing: 3, red: 4 };
 
@@ -3258,7 +3276,7 @@ function renderReport() {
         displaySections.push({
           code: section.code, gen: section.gen, rows: visibleRows,
           ancestorHeader: section.ancestorHeader,
-          status: computeSectionStatus({ rows: section.rows.filter(inScope) }, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance),
+          status: computeSectionStatus({ rows: visibleRows }, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance),
           flat: false
         });
       }
