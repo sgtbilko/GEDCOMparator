@@ -569,6 +569,28 @@ v59 - Fixed grouped-mode header colours disagreeing with the rows listed under
       unchanged. computeSectionStatus() itself is unchanged apart from its
       comment, so direct unit tests of it still hold. Tests:
       section-status-visible.test.js.
+v60 - Cleanup only; ZERO behaviour change (the golden render snapshot is
+      byte-identical before and after). Removed code that did nothing: the
+      never-read totalMissingA/totalMissingB counters and their 12 increments
+      inside runCompare() (renderReport keeps its own live pair, which feeds
+      the "Missing from either file" card); the unused `records` array in
+      parseGedcom(); and the `marr` field returned by
+      getSpousesWithMarriage(), which callers never read (marriage data comes
+      from findMarriageFam). Fixed stale comments: the "Nearest WikiTree"
+      header now describes the two-phase order introduced in v49 (children/
+      parents, a spouse, the rest of the direct line, then everyone else by
+      fewest steps); the rowHasEffectiveDiff comment was moved off
+      fieldIsSame onto its own function; the outdated "default only" note
+      after placeSimilarity() was removed; isSubstantiallyDifferent() and the
+      individual-record form of birthSubstantiallyDifferent() are marked as
+      test/compat wrappers (kept, as tests call them). Deleted CSS that
+      matches no markup: the .opts-row family and .opts-col, .legend span,
+      .dot, the th rules, .row-exact/.row-hidden/.section-hidden/
+      .section-head .count, the dead #locationThresholdVal selector, and the
+      input[type="number"] styling (maxGen/descendantGen are selects). The
+      `section-flat` class is deliberately KEPT in the markup: it has no CSS
+      but the snapshot hashes the rendered HTML, so removing it would break
+      the zero-change guarantee.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -628,7 +650,7 @@ v59 - Fixed grouped-mode header colours disagreeing with the rows listed under
   .file-col label { font-size: 12px; color: var(--muted); display: block; margin-bottom: 6px; }
   input[type="file"] { font-size: 13px; }
   .status-line { font-size: 12px; color: var(--accent); margin-top: 6px; min-height: 16px; }
-  select, input[type="text"], input[type="number"] {
+  select, input[type="text"] {
     width: 100%;
     padding: 8px 10px;
     border: 1px solid var(--line);
@@ -636,18 +658,12 @@ v59 - Fixed grouped-mode header colours disagreeing with the rows listed under
     font-size: 13px;
     margin-top: 4px;
   }
-  .opts-row { display: flex; gap: 20px; flex-wrap: wrap; margin-top: 14px; align-items: center; }
-  .opts-row > div { display: flex; align-items: center; gap: 8px; }
-  .opts-row label { font-size: 13px; color: var(--ink); }
-  .opts-row input[type="number"] { width: 70px; margin-top: 0; }
-  .opts-col, .opts-row > .opts-col { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; max-width: 340px; }
   .opts-line { display: flex; align-items: center; gap: 8px; }
   .hint { font-size: 11px; color: var(--muted); line-height: 1.4; }
-  .opts-row label.disabled-label, .opts-stack label.disabled-label { color: var(--muted); }
+  .opts-stack label.disabled-label { color: var(--muted); }
   .opts-stack { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
   .opts-stack-line { display: flex; align-items: center; gap: 8px; }
   .opts-stack-line label { font-size: 13px; color: var(--ink); }
-  .opts-stack-line input[type="number"] { width: 70px; margin-top: 0; }
   .opts-stack-line select.gen-select, .opts-line select.gen-select, .report-controls select.gen-select { width: auto; margin-top: 0; padding: 5px 8px; }
   .opts-stack-line-wrap { flex-direction: column; align-items: flex-start; gap: 4px; }
   .opts-stack-line-wrap .opts-line { display: flex; align-items: center; gap: 8px; }
@@ -765,8 +781,7 @@ v59 - Fixed grouped-mode header colours disagreeing with the rows listed under
   .section-body { padding: 14px 16px; }
   .section-body.reviewed-row { opacity: 0.6; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
   tr:last-child td { border-bottom: none; }
   .badge {
     display: inline-block;
@@ -847,8 +862,6 @@ v59 - Fixed grouped-mode header colours disagreeing with the rows listed under
   .similar-note { color: var(--accent); font-size: 11px; font-style: italic; }
   .empty-val { color: var(--muted); font-style: italic; }
   .legend { font-size: 12px; color: var(--muted); margin-bottom: 14px; display: flex; gap: 18px; flex-wrap: wrap; }
-  .legend span { display: inline-flex; align-items: center; gap: 6px; }
-  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
   .filter-input { margin-bottom: 4px; }
   #report { display: none; }
   .report-controls {
@@ -880,7 +893,7 @@ v59 - Fixed grouped-mode header colours disagreeing with the rows listed under
   .link-button:hover { opacity: 0.75; }
   .slider-wrap { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
   .slider-wrap input[type="range"] { width: 100px; margin-top: 0; accent-color: var(--accent); }
-  .slider-wrap span#aliveYearsVal, .slider-wrap span#locationThresholdVal { color: var(--ink); font-weight: 600; min-width: 28px; }
+  .slider-wrap span#aliveYearsVal { color: var(--ink); font-weight: 600; min-width: 28px; }
   /* Collapsible settings panels (Similarity / Display): the heading keeps a
      chevron at its top-left; collapsed (the default) hides everything but it. */
   .panel-heading { flex-basis: 100%; margin: 0 0 4px; font-size: 15px; display: flex; align-items: center; gap: 8px; }
@@ -891,10 +904,6 @@ v59 - Fixed grouped-mode header colours disagreeing with the rows listed under
   .report-controls.panel-collapsed > *:not(h2) { display: none !important; }
   .report-controls.panel-collapsed { row-gap: 0; }
   .report-controls input.surname-input { width: 240px; margin-top: 0; padding: 5px 8px; }
-  .row-exact { }
-  .row-hidden { display: none !important; }
-  .section-hidden { display: none !important; }
-  .section-head .count { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 8px; }
 </style>
 </head>
 <body>
@@ -1176,7 +1185,6 @@ function onIncludeSiblingsChange() {
 
 function parseGedcom(text) {
   const rawLines = text.split(/\r\n|\r|\n/);
-  const records = []; // top-level records (level 0)
   const stack = []; // [{level, node}]
   let root = { level: -1, children: [] };
   stack.push({ level: -1, node: root });
@@ -1316,17 +1324,21 @@ function classifyWebLink(rawUrl) {
 
 // ---------- "Nearest WikiTree" fallback ----------
 // When a person has no WikiTree link of their own, we look outward from their
-// own record(s) for the closest relative who does — genuinely closest, by
-// number of family-tree steps (a breadth-first search), not a fixed list of
-// relationship types. Children and parents (blood, one step away) are always
-// checked before a spouse (also one step away, but by marriage) at the same
-// depth; beyond that, each new step outward (siblings, grandparents,
-// grandchildren, in-laws, ...) is only explored once everything at the
-// current step has come up empty, so the first link found really is the
-// fewest possible steps from the person in question. Each step is checked
-// across BOTH files before moving further out, since a spouse recorded only
-// in File B should still win over, say, a grandchild recorded in File A.
-// Returns null when nothing within a generous depth has a WikiTree link —
+// own record(s) for the closest relative who does. Since v49 this is a
+// two-phase search (see findNearestWikiTreeUrl), in this preference order:
+//   1. children and parents;
+//   2. a spouse;
+//   3. the rest of the direct line, outward however far: grandchildren/
+//      grandparents, then great-grandchildren/great-grandparents, and so on
+//      (descendants ahead of ancestors at the same generation gap);
+//   4. everyone else (siblings, in-laws, cousins, ...) by fewest family-tree
+//      steps, via a plain breadth-first search where blood links at a given
+//      depth are checked before a spouse.
+// Siblings and other collateral relatives are therefore used only when nobody
+// in the direct line, and no spouse, has a link. Every step is checked across
+// BOTH files before moving further out, since a spouse recorded only in
+// File B should still win over, say, a grandchild recorded in File A.
+// Returns null when nothing within the search limits has a WikiTree link —
 // callers should then simply omit the button.
 function hasWikiTreeLink(links) {
   return !!(links && links.some(l => l.label === 'WikiTree'));
@@ -1563,7 +1575,7 @@ function getSpousesWithMarriage(data, indiId) {
     if (!fam) continue;
     const spouseId = fam.husb === indiId ? fam.wife : (fam.wife === indiId ? fam.husb : null);
     if (spouseId && data.individuals[spouseId]) {
-      result.push({ spouseId, marr: fam.marr });
+      result.push({ spouseId });
     }
   }
   return result;
@@ -1981,7 +1993,6 @@ function placeSimilarity(a, b) {
   }
   return (2 * matches) / (bigrams(na).length + bigrams(nb).length);
 }
-// Default only — the active threshold is read live from the slider in renderReport.
 
 // ---------- Unified 3-tier similarity model (v42) ----------
 // Name, Date and Location tolerance all work the same way now. Each field
@@ -2131,10 +2142,13 @@ function birthSubstantiallyDifferentRaw(dateA, dateB, placeA, placeB, dateTolera
          birthPlaceSubstantiallyDifferent(placeA, placeB, locationThreshold);
 }
 
+// Test/compat wrapper: the live report uses the raw-string form above (via
+// rowSubstantiallyDifferent); this individual-record form is kept for tests.
 function birthSubstantiallyDifferent(indA, indB, dateToleranceDays, locationThreshold) {
   return birthSubstantiallyDifferentRaw(indA.birth.date, indB.birth.date, indA.birth.place, indB.birth.place, dateToleranceDays, locationThreshold);
 }
 
+// Test/compat wrapper (see birthSubstantiallyDifferent): not used by the live report.
 function isSubstantiallyDifferent(indA, indB, nameTolerance, dateToleranceDays, locationThreshold) {
   if (!indA || !indB) return false;
   return nameSubstantiallyDifferent(indA.name, indB.name, nameTolerance) ||
@@ -2412,7 +2426,6 @@ function runCompare() {
   const allCodes = Array.from(new Set([...Object.keys(lineageA), ...Object.keys(lineageB)]));
   allCodes.sort((c1, c2) => c1.length - c2.length || c1.localeCompare(c2));
 
-  let totalMissingA = 0, totalMissingB = 0;
   const sections = [];
 
   for (const code of allCodes) {
@@ -2428,11 +2441,9 @@ function runCompare() {
       rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(), aId: idA, bId: idB, nameA: indA.name, nameB: indB.name, surnames: [indA.name.surname, indB.name.surname], ...relationshipInfo('Ancestor', code, 0, '') });
       markShown(idA, idB);
     } else if (idA) {
-      totalMissingB++;
       rows.push({ ...missingRow('Ancestor', 'missB', dataA.individuals[idA]), ...relationshipInfo('Ancestor', code, 0, '') });
       markShown(idA, null);
     } else if (idB) {
-      totalMissingA++;
       rows.push({ ...missingRow('Ancestor', 'missA', dataB.individuals[idB]), ...relationshipInfo('Ancestor', code, 0, '') });
       markShown(null, idB);
     } else {
@@ -2464,13 +2475,11 @@ function runCompare() {
     }
     for (const aId of sibMatch.missingInB) {
       if (isAlreadyCovered(aId, null)) continue;
-      totalMissingB++;
       rows.push({ ...missingRow('Sibling', 'missB', dataA.individuals[aId]), ...relationshipInfo('Sibling', code, null, normVal(dataA.individuals[aId].sex)) });
       markShown(aId, null);
     }
     for (const bId of sibMatch.missingInA) {
       if (isAlreadyCovered(null, bId)) continue;
-      totalMissingA++;
       rows.push({ ...missingRow('Sibling', 'missA', dataB.individuals[bId]), ...relationshipInfo('Sibling', code, null, normVal(dataB.individuals[bId].sex)) });
       markShown(null, bId);
     }
@@ -2502,13 +2511,11 @@ function runCompare() {
     }
     for (const aId of spouseMatch.missingInB) {
       if (isAlreadyCovered(aId, null)) continue;
-      totalMissingB++;
       rows.push({ ...missingRow('Spouse', 'missB', dataA.individuals[aId]), ...relationshipInfo('Spouse', code, null, normVal(dataA.individuals[aId].sex)) });
       markShown(aId, null);
     }
     for (const bId of spouseMatch.missingInA) {
       if (isAlreadyCovered(null, bId)) continue;
-      totalMissingA++;
       rows.push({ ...missingRow('Spouse', 'missA', dataB.individuals[bId]), ...relationshipInfo('Spouse', code, null, normVal(dataB.individuals[bId].sex)) });
       markShown(null, bId);
     }
@@ -2541,13 +2548,11 @@ function runCompare() {
       }
       for (const aId of m.missingInB) {
         if (isAlreadyCovered(aId, null)) continue;
-        totalMissingB++;
         rows.push({ ...missingRow("Sibling's spouse", 'missB', dataA.individuals[aId]), ...relationshipInfo("Sibling's spouse", code, null, normVal(dataA.individuals[aId].sex)) });
         markShown(aId, null);
       }
       for (const bId of m.missingInA) {
         if (isAlreadyCovered(null, bId)) continue;
-        totalMissingA++;
         rows.push({ ...missingRow("Sibling's spouse", 'missA', dataB.individuals[bId]), ...relationshipInfo("Sibling's spouse", code, null, normVal(dataB.individuals[bId].sex)) });
         markShown(null, bId);
       }
@@ -2605,7 +2610,6 @@ function runCompare() {
         if (visited.a.has(id)) continue;
         visited.a.add(id);
         if (!shownIdsA.has(id)) {
-          totalMissingB++;
           rows.push({ ...missingRow(label, 'missB', dataA.individuals[id]), ...relationshipInfo(label, code, genIndex, normVal(dataA.individuals[id].sex)) });
           markShown(id, null);
           addDescendantSpouseRows(id, null, label, genIndex, rows);
@@ -2616,7 +2620,6 @@ function runCompare() {
         if (visited.b.has(id)) continue;
         visited.b.add(id);
         if (!shownIdsB.has(id)) {
-          totalMissingA++;
           rows.push({ ...missingRow(label, 'missA', dataB.individuals[id]), ...relationshipInfo(label, code, genIndex, normVal(dataB.individuals[id].sex)) });
           markShown(null, id);
           addDescendantSpouseRows(null, id, label, genIndex, rows);
@@ -2655,13 +2658,11 @@ function runCompare() {
       }
       for (const id of sm.missingInB) {
         if (isAlreadyCovered(id, null)) continue;
-        totalMissingB++;
         rows.push({ ...missingRow(role, 'missB', dataA.individuals[id]), ...relationshipInfo(role, code, genIndex, normVal(dataA.individuals[id].sex)) });
         markShown(id, null);
       }
       for (const id of sm.missingInA) {
         if (isAlreadyCovered(null, id)) continue;
-        totalMissingA++;
         rows.push({ ...missingRow(role, 'missA', dataB.individuals[id]), ...relationshipInfo(role, code, genIndex, normVal(dataB.individuals[id].sex)) });
         markShown(null, id);
       }
@@ -2760,7 +2761,6 @@ function matchYearsSuffix(row) {
   return ` (${by || '?'}-${dy || '?'})`;
 }
 
-// Whether a matched row still counts as "different" once the active filters are applied.
 // Whether a field counts as "same" once the live "Date tolerance" setting is
 // applied: a date-type field is always recomputed fresh from its raw a/b
 // text via datesMatch() (a pure function of the two strings and a tolerance
@@ -2782,6 +2782,7 @@ function fieldIsSame(f, dateToleranceDays, nameTolerance) {
   return f.same;
 }
 
+// Whether a matched row still counts as "different" once the active filters are applied.
 function rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance) {
   if (!row.fieldDiffs) return true;
   return row.fieldDiffs.some(f => {
