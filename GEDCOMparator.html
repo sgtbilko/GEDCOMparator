@@ -591,6 +591,23 @@ v60 - Cleanup only; ZERO behaviour change (the golden render snapshot is
       `section-flat` class is deliberately KEPT in the markup: it has no CSS
       but the snapshot hashes the rendered HTML, so removing it would break
       the zero-change guarantee.
+v61 - Speed only; ZERO behaviour change (the golden render snapshot is
+      byte-identical before and after). findCounterpartInOtherFile() - used
+      by the "Nearest WikiTree" fallback - used to scan the whole other file
+      (several regex replaces per person) for every candidate relative, at
+      every search step, for every row without a WikiTree link, which made it
+      the dominant cost of runCompare() on larger files. It now looks the
+      normalized name up in a per-file index (nameIndexOf(): a Map of
+      normalized full name -> individuals, built lazily on first use and
+      cached in a WeakMap keyed on the parsed data object, so a re-parse
+      creates a new object and a stale index can never be used). Candidate
+      order matches the old Object.values() order, and the birth-year
+      narrowing and "exactly one candidate or null" rule are untouched. The
+      only way the cache could go stale is code mutating data.individuals in
+      place after a first lookup; nothing in the app does (parseGedcom is the
+      only writer, building a fresh object), and no test does either (the
+      wikitree-fallback tests populate each data object before looking up).
+      Tests: name-index.test.js.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -1357,11 +1374,31 @@ function wikiTreeUrlOf(ind) {
 // there's more than one candidate), matching the same "don't guess" standard
 // matchLists() already applies elsewhere in the report — an ambiguous name
 // collision across the whole file is not treated as a match.
+// One Map per parsed file: normalized full name -> [individuals], built lazily on
+// first use and cached against the data object (a re-parse makes a new object, so
+// the cache can never go stale). Candidate order matches Object.values() order.
+const nameIndexCache = new WeakMap();
+function nameIndexOf(data) {
+  let idx = nameIndexCache.get(data);
+  if (!idx) {
+    idx = new Map();
+    for (const o of Object.values(data.individuals)) {
+      const key = normalizeName(o.name.full);
+      if (!key) continue;
+      let list = idx.get(key);
+      if (!list) idx.set(key, list = []);
+      list.push(o);
+    }
+    nameIndexCache.set(data, idx);
+  }
+  return idx;
+}
+
 function findCounterpartInOtherFile(ind, otherData) {
   if (!ind || !otherData) return null;
   const name = normalizeName(ind.name.full);
   if (!name) return null;
-  let candidates = Object.values(otherData.individuals).filter(o => normalizeName(o.name.full) === name);
+  let candidates = nameIndexOf(otherData).get(name) || [];
   if (candidates.length > 1) {
     const year = extractYear(ind.birth.date);
     if (year) {
