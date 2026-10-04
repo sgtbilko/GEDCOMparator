@@ -630,6 +630,35 @@ v62 - Speed only; ZERO behaviour change (the golden render snapshot is
       vm); toggleReviewed/onCategoryToggle etc. still call renderReport
       directly. rowSubstantiallyDifferent, rowHasEffectiveDiff, matchExactness
       and statusBadge keep their signatures. Tests: classify-row.test.js.
+v63 - Refactor only; ZERO behaviour change (the golden render snapshot is
+      byte-identical before and after, and a one-off comparison of every row
+      object - ids, order and all fields - across 192 compare-option combinations
+      matched the previous file exactly, apart from the two new fields below).
+      runCompare() used to assemble rows in five near-identical places
+      (siblings, ancestor spouses, siblings' spouses, descendants, descendants'
+      spouses), each repeating the same ~11-field object literal, with the
+      marriage date/place fields written out twice; adding a field meant
+      remembering all five. New buildMatchedRow()/buildMissingRow()/
+      marriageFields() factories are now the single place a row is built (the
+      ancestor's own row stays hand-built as its fields differ), and a small
+      addListRows() runs the pairs / only-in-A / only-in-B loop shared by the
+      four list-style cases. The three inner helpers (addSiblingSpouseRows,
+      addDescendantRows, addDescendantSpouseRows) used to be declared INSIDE the
+      per-ancestor loop, so they were re-created for every ancestor and relied
+      on sloppy-mode block-function hoisting; they are now declared once before
+      the loop and take the section's code via a small ctx object. The descendant
+      walk keeps its own special logic (visited sets, "already shown but still
+      walked through") and only uses the factories. Order of nextRowId() calls
+      is unchanged. Rows now carry a structured `kind` ('ancestor' | 'sibling' |
+      'spouse' | 'siblingSpouse' | 'descendant' | 'descendantSpouse') and
+      `depth` (descendant depth, else null) from the moment they are created.
+      roleToKind() adapts the display strings to them, and relationshipInfo()/
+      distanceFromRoot() were split into kind-based cores
+      (relationshipInfoForKind(), distanceForKind()) with the old string-based
+      functions kept as thin wrappers, so no regex-parsing of labels such as
+      "Great-great-grandchild's spouse" happens in the compare path any more and
+      row.distance is set straight from kind/depth. Display labels are unchanged.
+      Tests: row-kinds.test.js.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -1847,30 +1876,36 @@ function combinedLinks(indA, indB) {
 // meaningful for descendant roles. sex: 'M' / 'F' / '' for the row's person —
 // ignored for 'Ancestor' rows, whose gender comes from the code itself.
 function relationshipInfo(role, code, depth, sex) {
+  return relationshipInfoForKind(roleToKind(role).kind, role, code, depth, sex);
+}
+
+// Structured core of relationshipInfo(). kind: see roleToKind(); role is only
+// used for the display text of descendant-style path descriptions.
+function relationshipInfoForKind(kind, role, code, depth, sex) {
   const L = code.length;
   const isRootSection = code === '';
   const pathLower = isRootSection ? '' : decapitalize(lineageLabel(code));
 
-  if (role === 'Ancestor') {
+  if (kind === 'ancestor') {
     if (isRootSection) return { relationshipTerm: 'Root', pathDescription: null };
     const codeGenderSex = code[L - 1] === 'F' ? 'M' : 'F';
     return { relationshipTerm: capitalize(relationshipFromUV(L, 0, codeGenderSex, false)), pathDescription: pathLower };
   }
-  if (role === 'Sibling') {
+  if (kind === 'sibling') {
     const term = relationshipFromUV(L + 1, 1, sex, false);
     return { relationshipTerm: capitalize(term), pathDescription: isRootSection ? 'sibling' : `${pathLower}'s sibling` };
   }
-  if (role === "Sibling's spouse") {
+  if (kind === 'siblingSpouse') {
     const term = relationshipFromUV(L + 1, 1, sex, false);
     return { relationshipTerm: capitalize(term), pathDescription: isRootSection ? "sibling's spouse" : `${pathLower}'s sibling's spouse` };
   }
-  if (role === 'Spouse') {
+  if (kind === 'spouse') {
     const term = isRootSection ? spouseTerm(sex) : stepAncestorTerm(L, sex);
     return { relationshipTerm: capitalize(term), pathDescription: isRootSection ? 'spouse' : `${pathLower}'s spouse` };
   }
   // A descendant's spouse ('Child's spouse', 'Grandchild's spouse', ...): the
   // spouse of someone reached through the descendant walk, at that depth.
-  if (isDescendantSpouseRole(role)) {
+  if (kind === 'descendantSpouse') {
     const term = descendantSpouseTerm(L, depth, sex);
     return { relationshipTerm: capitalize(term), pathDescription: isRootSection ? role.toLowerCase() : `${pathLower}'s ${role.toLowerCase()}` };
   }
@@ -1881,6 +1916,19 @@ function relationshipInfo(role, code, depth, sex) {
   const half = (L === 1 && depth === 1);
   const term = relationshipFromUV(L, depth, sex, half);
   return { relationshipTerm: capitalize(term), pathDescription: isRootSection ? role.toLowerCase() : `${pathLower}'s ${role.toLowerCase()}` };
+}
+
+// Adapter from the display strings ('Ancestor', 'Sibling', "Grandchild's
+// spouse", ...) to the structured { kind, depth } every row now carries.
+function roleToKind(role) {
+  if (role === 'Ancestor') return { kind: 'ancestor', depth: null };
+  if (role === 'Sibling') return { kind: 'sibling', depth: null };
+  if (role === 'Spouse') return { kind: 'spouse', depth: null };
+  if (role === "Sibling's spouse") return { kind: 'siblingSpouse', depth: null };
+  const m = String(role).match(/^(.*)'s spouse$/);
+  if (m && descendantDepthFromRole(m[1]) !== null) return { kind: 'descendantSpouse', depth: descendantDepthFromRole(m[1]) };
+  const d = descendantDepthFromRole(role);
+  return d !== null ? { kind: 'descendant', depth: d } : { kind: 'unknown', depth: null };
 }
 
 // "Child's spouse", "Grandchild's spouse", "Great-grandchild's spouse", ...
@@ -1924,17 +1972,20 @@ function descendantDepthFromRole(role) {
 }
 
 function distanceFromRoot(role, code) {
+  const k = roleToKind(role);
+  return distanceForKind(k.kind, k.depth, code);
+}
+
+// Structured core of distanceFromRoot(); depth is the descendant depth for
+// 'descendant' / 'descendantSpouse' kinds and ignored otherwise.
+function distanceForKind(kind, depth, code) {
   const L = code.length;
-  if (role === 'Ancestor') return L;
-  if (role === 'Sibling' || role === 'Spouse') return L + 1;
-  if (role === "Sibling's spouse") return L + 2;
-  if (isDescendantSpouseRole(role)) {
-    const inner = distanceFromRoot(String(role).replace(/'s spouse$/, ''), code);
-    return inner === null ? null : inner + 1;
-  }
-  const d = descendantDepthFromRole(role);
-  if (d === null) return null;
-  return L === 0 ? d : L + d - 1;
+  if (kind === 'ancestor') return L;
+  if (kind === 'sibling' || kind === 'spouse') return L + 1;
+  if (kind === 'siblingSpouse') return L + 2;
+  if (kind === 'descendant') return L === 0 ? depth : L + depth - 1;
+  if (kind === 'descendantSpouse') return distanceForKind('descendant', depth, code) + 1;
+  return null;
 }
 
 function distanceText(row) {
@@ -2429,6 +2480,40 @@ function renderValueCell(f, ignoreSimilarLocations, locationThreshold, dateToler
   return `<span class="diff-cell"><span class="a">A: ${aVal}</span><br><span class="b">B: ${bVal}</span></span>`;
 }
 
+// Marriage date/place comparison rows for a spouse pair; famA/famB are the
+// FAM records (or null) in each file.
+function marriageFields(famA, famB, dateToleranceDays) {
+  const mA = famA ? famA.marr : { date: '', place: '' };
+  const mB = famB ? famB.marr : { date: '', place: '' };
+  const dm = datesMatch(mA.date, mB.date, dateToleranceDays);
+  return [
+    { label: 'Marriage date', a: mA.date, b: mB.date, same: dm, type: 'date', similarity: dm ? 1 : 0 },
+    { label: 'Marriage place', a: mA.place, b: mB.place, same: fieldsEqual(mA.place, mB.place), type: 'place', similarity: placeSimilarity(mA.place, mB.place) }
+  ];
+}
+
+// The one place a matched-pair row is assembled. ctx = { code, dateToleranceDays };
+// kind/depth: see roleToKind(); marriage = { famA, famB } | undefined.
+function buildMatchedRow(ctx, role, kind, depth, pair, marriage) {
+  const indA = dataA.individuals[pair.aId], indB = dataB.individuals[pair.bId];
+  const fieldDiffs = compareIndividuals(indA, indB, ctx.dateToleranceDays);
+  if (marriage) fieldDiffs.push(...marriageFields(marriage.famA, marriage.famB, ctx.dateToleranceDays));
+  return {
+    role, kind, depth, status: pair.confidence === 'maybe' ? 'maybe' : 'both',
+    name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB),
+    links: combinedLinks(indA, indB), id: nextRowId(), aId: pair.aId, bId: pair.bId,
+    nameA: indA.name, nameB: indB.name, surnames: [indA.name.surname, indB.name.surname],
+    ...relationshipInfoForKind(kind, role, ctx.code, depth, combinedSex(indA, indB))
+  };
+}
+
+// A person present in only one file; side 'A' = only in File A.
+function buildMissingRow(ctx, role, kind, depth, side, id) {
+  const ind = (side === 'A' ? dataA : dataB).individuals[id];
+  return { ...missingRow(role, side === 'A' ? 'missB' : 'missA', ind), kind, depth,
+           ...relationshipInfoForKind(kind, role, ctx.code, depth, normVal(ind.sex)) };
+}
+
 function runCompare() {
   const rootA = document.getElementById('rootA').value;
   const rootB = document.getElementById('rootB').value;
@@ -2487,23 +2572,115 @@ function runCompare() {
 
   const sections = [];
 
+  // Row-list helper shared by siblings, ancestor spouses, siblings' spouses and
+  // descendants' spouses: lists every matched pair and every one-sided person of
+  // a matchLists() result, skipping anyone already shown elsewhere in the report.
+  // marriageOf(pair) -> { famA, famB } for spouse lists, omitted otherwise.
+  function addListRows(ctx, role, kind, depth, m, rows, marriageOf) {
+    for (const pair of m.pairs) {
+      if (isAlreadyCovered(pair.aId, pair.bId)) continue;
+      rows.push(buildMatchedRow(ctx, role, kind, depth, pair, marriageOf && marriageOf(pair)));
+      markShown(pair.aId, pair.bId);
+    }
+    for (const id of m.missingInB) {
+      if (isAlreadyCovered(id, null)) continue;
+      rows.push(buildMissingRow(ctx, role, kind, depth, 'A', id));
+      markShown(id, null);
+    }
+    for (const id of m.missingInA) {
+      if (isAlreadyCovered(null, id)) continue;
+      rows.push(buildMissingRow(ctx, role, kind, depth, 'B', id));
+      markShown(null, id);
+    }
+  }
+
+  function addSiblingSpouseRows(ctx, sibAId, sibBId, rows) {
+    const spA = sibAId ? getSpousesWithMarriage(dataA, sibAId).map(s => s.spouseId) : [];
+    const spB = sibBId ? getSpousesWithMarriage(dataB, sibBId).map(s => s.spouseId) : [];
+    addListRows(ctx, "Sibling's spouse", 'siblingSpouse', null, matchLists(dataA, spA.slice(), dataB, spB.slice()), rows);
+  }
+
+  // The spouse(s) of one listed descendant, matched across the two files the
+  // same way as an ancestor's spouses and compared including marriage
+  // date/place. Not walked further: a spouse's other marriages and families
+  // are not descendants of the ancestor.
+  function addDescendantSpouseRows(ctx, aId, bId, descLabel, genIndex, rows) {
+    const spA = aId ? getSpousesWithMarriage(dataA, aId).map(x => x.spouseId) : [];
+    const spB = bId ? getSpousesWithMarriage(dataB, bId).map(x => x.spouseId) : [];
+    addListRows(ctx, `${descLabel}'s spouse`, 'descendantSpouse', genIndex, matchLists(dataA, spA.slice(), dataB, spB.slice()), rows,
+      pair => ({ famA: aId ? findMarriageFam(dataA, aId, pair.aId) : null, famB: bId ? findMarriageFam(dataB, bId, pair.bId) : null }));
+  }
+
+  function addDescendantRows(ctx, aId, bId, depthRemaining, genIndex, rows, visited) {
+    if (depthRemaining <= 0) return;
+    const childrenA = aId ? getChildren(dataA, aId) : [];
+    const childrenB = bId ? getChildren(dataB, bId) : [];
+    // Direct-line ancestors have their own section (and their own descendant
+    // walk), so they are never listed or walked through here. Everyone else
+    // is matched across the two files FIRST and de-duplicated afterwards: a
+    // pair counts as already shown if EITHER side was. (Filtering per file
+    // before matching used to make a person shown on one side only look
+    // falsely "missing" from the other.) People already shown elsewhere -
+    // e.g. as an ancestor's sibling - are not listed again but ARE still
+    // walked through, so their own children and grandchildren aren't lost.
+    const candA = childrenA.filter(id => !ancestorIdsA.has(id));
+    const candB = childrenB.filter(id => !ancestorIdsB.has(id));
+    const m = matchLists(dataA, candA.slice(), dataB, candB.slice());
+    const label = descendantLabel(genIndex);
+
+    for (const pair of m.pairs) {
+      if (visited.a.has(pair.aId) || visited.b.has(pair.bId)) continue;
+      visited.a.add(pair.aId); visited.b.add(pair.bId);
+      const alreadyShown = shownIdsA.has(pair.aId) || shownIdsB.has(pair.bId);
+      if (!alreadyShown) {
+        rows.push(buildMatchedRow(ctx, label, 'descendant', genIndex, pair));
+        markShown(pair.aId, pair.bId);
+        addDescendantSpouseRows(ctx, pair.aId, pair.bId, label, genIndex, rows);
+      } else {
+        markShown(pair.aId, pair.bId);
+      }
+      addDescendantRows(ctx, pair.aId, pair.bId, depthRemaining - 1, genIndex + 1, rows, visited);
+    }
+    for (const id of m.missingInB) {
+      if (visited.a.has(id)) continue;
+      visited.a.add(id);
+      if (!shownIdsA.has(id)) {
+        rows.push(buildMissingRow(ctx, label, 'descendant', genIndex, 'A', id));
+        markShown(id, null);
+        addDescendantSpouseRows(ctx, id, null, label, genIndex, rows);
+      }
+      addDescendantRows(ctx, id, null, depthRemaining - 1, genIndex + 1, rows, visited);
+    }
+    for (const id of m.missingInA) {
+      if (visited.b.has(id)) continue;
+      visited.b.add(id);
+      if (!shownIdsB.has(id)) {
+        rows.push(buildMissingRow(ctx, label, 'descendant', genIndex, 'B', id));
+        markShown(null, id);
+        addDescendantSpouseRows(ctx, null, id, label, genIndex, rows);
+      }
+      addDescendantRows(ctx, null, id, depthRemaining - 1, genIndex + 1, rows, visited);
+    }
+  }
+
   for (const code of allCodes) {
     const idA = lineageA[code];
     const idB = lineageB[code];
     const rows = [];
+    const ctx = { code, dateToleranceDays };
 
     // --- the ancestor at this position ---
     if (idA && idB) {
       const indA = dataA.individuals[idA];
       const indB = dataB.individuals[idB];
       const fieldDiffs = compareIndividuals(indA, indB, dateToleranceDays);
-      rows.push({ role: 'Ancestor', status: 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(), aId: idA, bId: idB, nameA: indA.name, nameB: indB.name, surnames: [indA.name.surname, indB.name.surname], ...relationshipInfo('Ancestor', code, 0, '') });
+      rows.push({ role: 'Ancestor', kind: 'ancestor', depth: null, status: 'both', name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(), aId: idA, bId: idB, nameA: indA.name, nameB: indB.name, surnames: [indA.name.surname, indB.name.surname], ...relationshipInfoForKind('ancestor', 'Ancestor', code, null, '') });
       markShown(idA, idB);
     } else if (idA) {
-      rows.push({ ...missingRow('Ancestor', 'missB', dataA.individuals[idA]), ...relationshipInfo('Ancestor', code, 0, '') });
+      rows.push(buildMissingRow(ctx, 'Ancestor', 'ancestor', null, 'A', idA));
       markShown(idA, null);
     } else if (idB) {
-      rows.push({ ...missingRow('Ancestor', 'missA', dataB.individuals[idB]), ...relationshipInfo('Ancestor', code, 0, '') });
+      rows.push(buildMissingRow(ctx, 'Ancestor', 'ancestor', null, 'B', idB));
       markShown(null, idB);
     } else {
       continue;
@@ -2518,103 +2695,20 @@ function runCompare() {
     const sibsA = (includeSiblings && idA) ? getSiblings(dataA, idA) : [];
     const sibsB = (includeSiblings && idB) ? getSiblings(dataB, idB) : [];
     const sibMatch = matchLists(dataA, sibsA.slice(), dataB, sibsB.slice());
-
-    for (const pair of sibMatch.pairs) {
-      if (isAlreadyCovered(pair.aId, pair.bId)) continue;
-      const indA = dataA.individuals[pair.aId];
-      const indB = dataB.individuals[pair.bId];
-      const fieldDiffs = compareIndividuals(indA, indB, dateToleranceDays);
-      rows.push({
-        role: 'Sibling', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
-        name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-        aId: pair.aId, bId: pair.bId, nameA: indA.name, nameB: indB.name, surnames: [indA.name.surname, indB.name.surname],
-        ...relationshipInfo('Sibling', code, null, combinedSex(indA, indB))
-      });
-      markShown(pair.aId, pair.bId);
-    }
-    for (const aId of sibMatch.missingInB) {
-      if (isAlreadyCovered(aId, null)) continue;
-      rows.push({ ...missingRow('Sibling', 'missB', dataA.individuals[aId]), ...relationshipInfo('Sibling', code, null, normVal(dataA.individuals[aId].sex)) });
-      markShown(aId, null);
-    }
-    for (const bId of sibMatch.missingInA) {
-      if (isAlreadyCovered(null, bId)) continue;
-      rows.push({ ...missingRow('Sibling', 'missA', dataB.individuals[bId]), ...relationshipInfo('Sibling', code, null, normVal(dataB.individuals[bId].sex)) });
-      markShown(null, bId);
-    }
+    addListRows(ctx, 'Sibling', 'sibling', null, sibMatch, rows);
 
     // --- spouses of the ancestor (only when "Include spouses of ancestors" is enabled) ---
     const spousesA = (includeAncestorSpouses && idA) ? getSpousesWithMarriage(dataA, idA).map(s => s.spouseId) : [];
     const spousesB = (includeAncestorSpouses && idB) ? getSpousesWithMarriage(dataB, idB).map(s => s.spouseId) : [];
     const spouseMatch = matchLists(dataA, spousesA.slice(), dataB, spousesB.slice());
-
-    for (const pair of spouseMatch.pairs) {
-      if (isAlreadyCovered(pair.aId, pair.bId)) continue;
-      const indA = dataA.individuals[pair.aId];
-      const indB = dataB.individuals[pair.bId];
-      const fieldDiffs = compareIndividuals(indA, indB, dateToleranceDays);
-      // add marriage comparison
-      const famA = idA ? findMarriageFam(dataA, idA, pair.aId) : null;
-      const famB = idB ? findMarriageFam(dataB, idB, pair.bId) : null;
-      const marrA = famA ? famA.marr : { date: '', place: '' };
-      const marrB = famB ? famB.marr : { date: '', place: '' };
-      fieldDiffs.push({ label: 'Marriage date', a: marrA.date, b: marrB.date, same: datesMatch(marrA.date, marrB.date, dateToleranceDays), type: 'date', similarity: datesMatch(marrA.date, marrB.date, dateToleranceDays) ? 1 : 0 });
-      fieldDiffs.push({ label: 'Marriage place', a: marrA.place, b: marrB.place, same: fieldsEqual(marrA.place, marrB.place), type: 'place', similarity: placeSimilarity(marrA.place, marrB.place) });
-      rows.push({
-        role: 'Spouse', status: pair.confidence === 'maybe' ? 'maybe' : 'both',
-        name: indA.name.full || indB.name.full, fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-        aId: pair.aId, bId: pair.bId, nameA: indA.name, nameB: indB.name, surnames: [indA.name.surname, indB.name.surname],
-        ...relationshipInfo('Spouse', code, null, combinedSex(indA, indB))
-      });
-      markShown(pair.aId, pair.bId);
-    }
-    for (const aId of spouseMatch.missingInB) {
-      if (isAlreadyCovered(aId, null)) continue;
-      rows.push({ ...missingRow('Spouse', 'missB', dataA.individuals[aId]), ...relationshipInfo('Spouse', code, null, normVal(dataA.individuals[aId].sex)) });
-      markShown(aId, null);
-    }
-    for (const bId of spouseMatch.missingInA) {
-      if (isAlreadyCovered(null, bId)) continue;
-      rows.push({ ...missingRow('Spouse', 'missA', dataB.individuals[bId]), ...relationshipInfo('Spouse', code, null, normVal(dataB.individuals[bId].sex)) });
-      markShown(null, bId);
-    }
+    addListRows(ctx, 'Spouse', 'spouse', null, spouseMatch, rows,
+      pair => ({ famA: idA ? findMarriageFam(dataA, idA, pair.aId) : null, famB: idB ? findMarriageFam(dataB, idB, pair.bId) : null }));
 
     // --- optionally spouses of siblings (only reachable when siblings themselves are included) ---
     if (includeSibSpouses) {
-      for (const pair of sibMatch.pairs) {
-        addSiblingSpouseRows(pair.aId, pair.bId, rows);
-      }
-      for (const aId of sibMatch.missingInB) addSiblingSpouseRows(aId, null, rows);
-      for (const bId of sibMatch.missingInA) addSiblingSpouseRows(null, bId, rows);
-    }
-
-    function addSiblingSpouseRows(sibAId, sibBId, rows) {
-      const spA = sibAId ? getSpousesWithMarriage(dataA, sibAId).map(s => s.spouseId) : [];
-      const spB = sibBId ? getSpousesWithMarriage(dataB, sibBId).map(s => s.spouseId) : [];
-      const m = matchLists(dataA, spA.slice(), dataB, spB.slice());
-      for (const pair of m.pairs) {
-        if (isAlreadyCovered(pair.aId, pair.bId)) continue;
-        const indA = dataA.individuals[pair.aId];
-        const indB = dataB.individuals[pair.bId];
-        const fieldDiffs = compareIndividuals(indA, indB, dateToleranceDays);
-        rows.push({
-          role: "Sibling's spouse", status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full,
-          fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-          aId: pair.aId, bId: pair.bId, nameA: indA.name, nameB: indB.name, surnames: [indA.name.surname, indB.name.surname],
-          ...relationshipInfo("Sibling's spouse", code, null, combinedSex(indA, indB))
-        });
-        markShown(pair.aId, pair.bId);
-      }
-      for (const aId of m.missingInB) {
-        if (isAlreadyCovered(aId, null)) continue;
-        rows.push({ ...missingRow("Sibling's spouse", 'missB', dataA.individuals[aId]), ...relationshipInfo("Sibling's spouse", code, null, normVal(dataA.individuals[aId].sex)) });
-        markShown(aId, null);
-      }
-      for (const bId of m.missingInA) {
-        if (isAlreadyCovered(null, bId)) continue;
-        rows.push({ ...missingRow("Sibling's spouse", 'missA', dataB.individuals[bId]), ...relationshipInfo("Sibling's spouse", code, null, normVal(dataB.individuals[bId].sex)) });
-        markShown(null, bId);
-      }
+      for (const pair of sibMatch.pairs) addSiblingSpouseRows(ctx, pair.aId, pair.bId, rows);
+      for (const aId of sibMatch.missingInB) addSiblingSpouseRows(ctx, aId, null, rows);
+      for (const bId of sibMatch.missingInA) addSiblingSpouseRows(ctx, null, bId, rows);
     }
 
     // --- optionally, descendants of this ancestor, N generations deep ---
@@ -2624,107 +2718,7 @@ function runCompare() {
     // list anyone twice.
     if (descendantGen > 0) {
       const visited = { a: new Set(idA ? [idA] : []), b: new Set(idB ? [idB] : []) };
-      addDescendantRows(idA, idB, descendantGen, 1, rows, visited);
-    }
-
-    function addDescendantRows(aId, bId, depthRemaining, genIndex, rows, visited) {
-      if (depthRemaining <= 0) return;
-      const childrenA = aId ? getChildren(dataA, aId) : [];
-      const childrenB = bId ? getChildren(dataB, bId) : [];
-      // Direct-line ancestors have their own section (and their own descendant
-      // walk), so they are never listed or walked through here. Everyone else
-      // is matched across the two files FIRST and de-duplicated afterwards: a
-      // pair counts as already shown if EITHER side was. (Filtering per file
-      // before matching used to make a person shown on one side only look
-      // falsely "missing" from the other.) People already shown elsewhere -
-      // e.g. as an ancestor's sibling - are not listed again but ARE still
-      // walked through, so their own children and grandchildren aren't lost.
-      const candA = childrenA.filter(id => !ancestorIdsA.has(id));
-      const candB = childrenB.filter(id => !ancestorIdsB.has(id));
-      const m = matchLists(dataA, candA.slice(), dataB, candB.slice());
-      const label = descendantLabel(genIndex);
-
-      for (const pair of m.pairs) {
-        if (visited.a.has(pair.aId) || visited.b.has(pair.bId)) continue;
-        visited.a.add(pair.aId); visited.b.add(pair.bId);
-        const alreadyShown = shownIdsA.has(pair.aId) || shownIdsB.has(pair.bId);
-        if (!alreadyShown) {
-          const indA = dataA.individuals[pair.aId];
-          const indB = dataB.individuals[pair.bId];
-          const fieldDiffs = compareIndividuals(indA, indB, dateToleranceDays);
-          rows.push({
-            role: label, status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full,
-            fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-            aId: pair.aId, bId: pair.bId, nameA: indA.name, nameB: indB.name, surnames: [indA.name.surname, indB.name.surname],
-            ...relationshipInfo(label, code, genIndex, combinedSex(indA, indB))
-          });
-          markShown(pair.aId, pair.bId);
-          addDescendantSpouseRows(pair.aId, pair.bId, label, genIndex, rows);
-        } else {
-          markShown(pair.aId, pair.bId);
-        }
-        addDescendantRows(pair.aId, pair.bId, depthRemaining - 1, genIndex + 1, rows, visited);
-      }
-      for (const id of m.missingInB) {
-        if (visited.a.has(id)) continue;
-        visited.a.add(id);
-        if (!shownIdsA.has(id)) {
-          rows.push({ ...missingRow(label, 'missB', dataA.individuals[id]), ...relationshipInfo(label, code, genIndex, normVal(dataA.individuals[id].sex)) });
-          markShown(id, null);
-          addDescendantSpouseRows(id, null, label, genIndex, rows);
-        }
-        addDescendantRows(id, null, depthRemaining - 1, genIndex + 1, rows, visited);
-      }
-      for (const id of m.missingInA) {
-        if (visited.b.has(id)) continue;
-        visited.b.add(id);
-        if (!shownIdsB.has(id)) {
-          rows.push({ ...missingRow(label, 'missA', dataB.individuals[id]), ...relationshipInfo(label, code, genIndex, normVal(dataB.individuals[id].sex)) });
-          markShown(null, id);
-          addDescendantSpouseRows(null, id, label, genIndex, rows);
-        }
-        addDescendantRows(null, id, depthRemaining - 1, genIndex + 1, rows, visited);
-      }
-    }
-
-    // The spouse(s) of one listed descendant, matched across the two files the
-    // same way as an ancestor's spouses and compared including marriage
-    // date/place. Not walked further: a spouse's other marriages and families
-    // are not descendants of the ancestor.
-    function addDescendantSpouseRows(aId, bId, descLabel, genIndex, rows) {
-      const role = `${descLabel}'s spouse`;
-      const spA = aId ? getSpousesWithMarriage(dataA, aId).map(x => x.spouseId) : [];
-      const spB = bId ? getSpousesWithMarriage(dataB, bId).map(x => x.spouseId) : [];
-      const sm = matchLists(dataA, spA.slice(), dataB, spB.slice());
-      for (const pair of sm.pairs) {
-        if (isAlreadyCovered(pair.aId, pair.bId)) continue;
-        const indA = dataA.individuals[pair.aId];
-        const indB = dataB.individuals[pair.bId];
-        const fieldDiffs = compareIndividuals(indA, indB, dateToleranceDays);
-        const famA = aId ? findMarriageFam(dataA, aId, pair.aId) : null;
-        const famB = bId ? findMarriageFam(dataB, bId, pair.bId) : null;
-        const marrA = famA ? famA.marr : { date: '', place: '' };
-        const marrB = famB ? famB.marr : { date: '', place: '' };
-        fieldDiffs.push({ label: 'Marriage date', a: marrA.date, b: marrB.date, same: datesMatch(marrA.date, marrB.date, dateToleranceDays), type: 'date', similarity: datesMatch(marrA.date, marrB.date, dateToleranceDays) ? 1 : 0 });
-        fieldDiffs.push({ label: 'Marriage place', a: marrA.place, b: marrB.place, same: fieldsEqual(marrA.place, marrB.place), type: 'place', similarity: placeSimilarity(marrA.place, marrB.place) });
-        rows.push({
-          role, status: pair.confidence === 'maybe' ? 'maybe' : 'both', name: indA.name.full || indB.name.full,
-          fieldDiffs, ...combinedLifeDates(indA, indB), links: combinedLinks(indA, indB), id: nextRowId(),
-          aId: pair.aId, bId: pair.bId, nameA: indA.name, nameB: indB.name, surnames: [indA.name.surname, indB.name.surname],
-          ...relationshipInfo(role, code, genIndex, combinedSex(indA, indB))
-        });
-        markShown(pair.aId, pair.bId);
-      }
-      for (const id of sm.missingInB) {
-        if (isAlreadyCovered(id, null)) continue;
-        rows.push({ ...missingRow(role, 'missB', dataA.individuals[id]), ...relationshipInfo(role, code, genIndex, normVal(dataA.individuals[id].sex)) });
-        markShown(id, null);
-      }
-      for (const id of sm.missingInA) {
-        if (isAlreadyCovered(null, id)) continue;
-        rows.push({ ...missingRow(role, 'missA', dataB.individuals[id]), ...relationshipInfo(role, code, genIndex, normVal(dataB.individuals[id].sex)) });
-        markShown(null, id);
-      }
+      addDescendantRows(ctx, idA, idB, descendantGen, 1, rows, visited);
     }
 
     sections.push({ code, label: lineageLabel(code), gen: code.length, rows, ancestorHeader });
@@ -2732,7 +2726,7 @@ function runCompare() {
 
   // Distance from the root person (see distanceFromRoot) for every row.
   for (const section of sections) {
-    for (const row of section.rows) row.distance = distanceFromRoot(row.role, section.code);
+    for (const row of section.rows) row.distance = distanceForKind(row.kind, row.depth, section.code);
   }
 
   // For anyone who doesn't already have their own WikiTree link, find the
