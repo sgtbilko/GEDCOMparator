@@ -608,6 +608,28 @@ v61 - Speed only; ZERO behaviour change (the golden render snapshot is
       only writer, building a fresh object), and no test does either (the
       wikitree-fallback tests populate each data object before looking up).
       Tests: name-index.test.js.
+v62 - Speed only; ZERO behaviour change (the golden render snapshot is
+      byte-identical before and after). renderReport() used to classify every
+      row three times per render: in evaluateRow (rowSubstantiallyDifferent +
+      rowHasEffectiveDiff + matchExactness), again inside computeSectionStatus
+      for each header, and a third time in the per-card loop for the badge and
+      card class - each re-parsing dates and re-running Levenshtein - and the
+      tolerance sliders fire oninput continuously, so a drag paid that on
+      every tick. New pure classifyRow(row, tol) composes the same three
+      functions into one { category, substantial, hasDiff, exactness } result
+      (rules unchanged: missing; else substantial; else 'maybe' status or any
+      effective diff -> diffs; else exact/similar from matchExactness), with
+      STATUS_OF_CATEGORY mapping a category to its header colour. renderReport
+      builds one `tol` object and a render-local Map memo (classOf) and uses
+      it for the counters, the likely-alive rule, the section headers and the
+      cards. computeSectionStatus() gained an OPTIONAL final parameter classOf;
+      omitted (direct calls in tests) it builds classifyRow from its other
+      arguments, and its skip rules are untouched. onFilterChange() now
+      coalesces slider-driven renders to one per animation frame, falling back
+      to a synchronous render when requestAnimationFrame is absent (the test
+      vm); toggleReviewed/onCategoryToggle etc. still call renderReport
+      directly. rowSubstantiallyDifferent, rowHasEffectiveDiff, matchExactness
+      and statusBadge keep their signatures. Tests: classify-row.test.js.
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -2891,7 +2913,39 @@ function matchExactness(row, ignoreSimilarLocations, locationThreshold, dateTole
 // Severity ranking for a section's overall status, worst to best.
 const SECTION_STATUS_RANK = { exact: 0, similar: 1, amber: 2, missing: 3, red: 4 };
 
-function computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance) {
+// Classifies one row into exactly one of the five summary-card categories,
+// composing the existing per-row checks (rowSubstantiallyDifferent,
+// rowHasEffectiveDiff, matchExactness) so the rules live in ONE place:
+//   missing (status missA/missB) > substantial > diffs ('maybe' status or any
+//   effective diff) > exact/similar (from matchExactness).
+// Pure: depends only on the row and `tol` = { ignoreSimilarLocations,
+// locationThreshold, dateToleranceDays, nameTolerance }. renderReport() calls
+// it once per row per render (memoised) and reuses the result for the
+// counters, the likely-alive rule, the section header colour and the card.
+// Returns { category, substantial, hasDiff, exactness }; exactness is only
+// non-null for the 'exact'/'similar' categories.
+function classifyRow(row, tol) {
+  if (row.status === 'missA' || row.status === 'missB') {
+    return { category: 'missing', substantial: false, hasDiff: true, exactness: null };
+  }
+  const substantial = rowSubstantiallyDifferent(row, tol.nameTolerance, tol.dateToleranceDays, tol.locationThreshold);
+  const hasDiff = rowHasEffectiveDiff(row, tol.ignoreSimilarLocations, tol.locationThreshold, tol.dateToleranceDays, tol.nameTolerance);
+  if (substantial) return { category: 'substantial', substantial, hasDiff, exactness: null };
+  if (row.status === 'maybe' || hasDiff) return { category: 'diffs', substantial, hasDiff, exactness: null };
+  const exactness = matchExactness(row, tol.ignoreSimilarLocations, tol.locationThreshold, tol.dateToleranceDays, tol.nameTolerance);
+  return { category: exactness === 'exact' ? 'exact' : 'similar', substantial, hasDiff, exactness };
+}
+// Header-colour status for each category.
+const STATUS_OF_CATEGORY = { missing: 'missing', substantial: 'red', diffs: 'amber', similar: 'similar', exact: 'exact' };
+
+function computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance, classOf) {
+  // classOf (optional): row -> classifyRow result, supplied by renderReport so
+  // rows are classified once per render. When omitted (direct calls), it is
+  // built here from the other arguments.
+  if (!classOf) {
+    const tol = { ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance };
+    classOf = row => classifyRow(row, tol);
+  }
   let status = 'exact';
   function upgrade(candidate) {
     if (SECTION_STATUS_RANK[candidate] > SECTION_STATUS_RANK[status]) status = candidate;
@@ -2907,12 +2961,7 @@ function computeSectionStatus(section, ignoreLikelyAlive, aliveYears, hideNoBirt
     }
     // status is 'both' or 'maybe'
     if (hideNoBirthDate && !normVal(row.birthDate)) continue;
-    if (rowSubstantiallyDifferent(row, nameTolerance, dateToleranceDays, locationThreshold)) { upgrade('red'); continue; }
-    if (row.status === 'maybe' || rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance)) {
-      upgrade('amber');
-      continue;
-    }
-    upgrade(matchExactness(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance));
+    upgrade(STATUS_OF_CATEGORY[classOf(row).category]);
   }
   return status;
 }
@@ -3074,8 +3123,15 @@ function onGroupByAncestorChange() {
   renderReport();
 }
 
+// Slider-driven renders (oninput fires continuously while dragging) are
+// coalesced to one per animation frame. Without requestAnimationFrame (the
+// test vm) it renders synchronously, as before.
+let renderQueued = false;
 function onFilterChange() {
-  renderReport();
+  if (typeof requestAnimationFrame !== 'function') { renderReport(); return; }
+  if (renderQueued) return;
+  renderQueued = true;
+  requestAnimationFrame(() => { renderQueued = false; renderReport(); });
 }
 
 // Collapse/expand one of the settings panels (Similarity / Display). Toggles a
@@ -3241,6 +3297,12 @@ function renderReport() {
   // checkboxes' hidden-count bookkeeping.
   const hiddenByCategory = { exact: 0, similar: 0, diffs: 0, substantial: 0, missing: 0 };
 
+  // Classify each row at most once per render and reuse the result for the
+  // counters, the likely-alive rule, header colours and the per-card badge.
+  const tol = { ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance };
+  const clsCache = new Map();
+  const classOf = row => { let c = clsCache.get(row); if (!c) clsCache.set(row, c = classifyRow(row, tol)); return c; };
+
   // Evaluate a single row against every filter exactly once. This is shared
   // between the two display modes below so switching "Group results by
   // ancestor" on/off can never change the top-line counts or which
@@ -3273,18 +3335,14 @@ function renderReport() {
       category = 'missing';
     } else {
       // status is 'both' or 'maybe'
-      const hasDiff = rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance);
-      // Exactly one of these four buckets, matching computeSectionStatus's
-      // own red > amber > similar/exact precedence for a single row.
-      if (rowSubstantiallyDifferent(row, nameTolerance, dateToleranceDays, locationThreshold)) {
-        category = 'substantial'; totalSubstantialDiffs++;
-      } else if (row.status === 'maybe' || hasDiff) {
-        category = 'diffs'; totalNeedsVerification++;
-      } else if (matchExactness(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance) === 'exact') {
-        category = 'exact'; totalExact++;
-      } else {
-        category = 'similar'; totalSimilar++;
-      }
+      const cls = classOf(row);
+      const hasDiff = cls.hasDiff;
+      // Exactly one of these four buckets (see classifyRow).
+      category = cls.category;
+      if (category === 'substantial') totalSubstantialDiffs++;
+      else if (category === 'diffs') totalNeedsVerification++;
+      else if (category === 'exact') totalExact++;
+      else totalSimilar++;
       // It also removes matched rows with mismatched data for a likely-living person.
       // Exact matches for likely-living people are unaffected by this option — those
       // are controlled separately by the "Exact match" card's own tickbox.
@@ -3314,7 +3372,7 @@ function renderReport() {
         displaySections.push({
           code: section.code, gen: section.gen, rows: visibleRows,
           ancestorHeader: section.ancestorHeader,
-          status: computeSectionStatus({ rows: visibleRows }, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance),
+          status: computeSectionStatus({ rows: visibleRows }, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance, classOf),
           flat: false
         });
       }
@@ -3327,7 +3385,7 @@ function renderReport() {
         if (!kept) continue;
         displaySections.push({
           code: 'row:' + row.id, gen: null, rows: [row], ancestorHeader: row,
-          status: computeSectionStatus({ rows: [row] }, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance),
+          status: computeSectionStatus({ rows: [row] }, ignoreLikelyAlive, aliveYears, hideNoBirthDate, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance, classOf),
           flat: true
         });
       }
@@ -3398,12 +3456,12 @@ function renderReport() {
     for (const row of section.rows) {
       const isReviewed = reviewedIds.has(personKey(row));
       const yearsSuffix = matchYearsSuffix(row);
-      const substantiallyDifferent = rowSubstantiallyDifferent(row, nameTolerance, dateToleranceDays, locationThreshold);
+      const cls = classOf(row);
+      const substantiallyDifferent = cls.substantial;
       // Only a clean 'both' match (no substantial difference, no effective
-      // diff) has a meaningful exactness to show on its badge.
-      const exactness = (row.status === 'both' && !substantiallyDifferent && !rowHasEffectiveDiff(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance))
-        ? matchExactness(row, ignoreSimilarLocations, locationThreshold, dateToleranceDays, nameTolerance)
-        : null;
+      // diff) has a meaningful exactness to show on its badge; classifyRow
+      // leaves exactness null for a 'maybe' match, so gate on status too.
+      const exactness = row.status === 'both' ? cls.exactness : null;
       // Flat mode has no bordered match-card beneath the header — just the
       // attributes, laid directly under it — since the header IS this row.
       const bodyClasses = [section.flat ? 'section-body' : 'match-card'];

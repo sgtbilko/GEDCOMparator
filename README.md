@@ -18,13 +18,12 @@ Matches are then shown with options to hide/show details as required based on yo
 
 ###### In Progress
 
-* refactoring to v62
+* refactoring to v63
 
 
 
 ###### Not Started
 
-* Refactoring v63-v64
 * Amend remaining hide/show options into "ignore" (no dob, likely alive, reviewed), "ui" (group, collapse)
 * optionally apply date \& location similarity checks to marriage and death
 * ensure all options can be saved
